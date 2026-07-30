@@ -45,7 +45,20 @@ def build_http2_stream(connection: Any) -> HTTP2ConnectionByteStream:
     return HTTP2ConnectionByteStream(connection, request, stream_id=1)
 
 
+def build_http11_stream_with_request(
+    connection: Any, request: Request
+) -> HTTP11ConnectionByteStream:
+    return HTTP11ConnectionByteStream(connection, request)
+
+
+def build_http2_stream_with_request(
+    connection: Any, request: Request
+) -> HTTP2ConnectionByteStream:
+    return HTTP2ConnectionByteStream(connection, request, stream_id=1)
+
+
 StreamFactory = Callable[[Any], Any]
+TraceStreamFactory = Callable[[Any, Request], Any]
 
 
 @pytest.mark.anyio
@@ -127,6 +140,38 @@ async def test_second_close_returns_before_delegated_release_finishes(
         connection.release.set()
 
     assert completed == ["second", "first"]
+    assert connection.cleaned is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "stream_factory",
+    [build_http11_stream_with_request, build_http2_stream_with_request],
+)
+async def test_response_closed_trace_callback_can_reenter_close_without_cycle(
+    stream_factory: TraceStreamFactory,
+) -> None:
+    connection = BlockingResponseClose()
+    connection.release.set()
+    stream_ref: dict[str, Any] = {}
+    nested_completed = anyio.Event()
+
+    async def trace(name: str, info: dict[str, Any]) -> None:
+        if name.endswith("response_closed.started"):
+            await stream_ref["stream"].aclose()
+            nested_completed.set()
+
+    request = Request(
+        "GET", "https://example.org/", extensions={"trace": trace}
+    )
+    stream = stream_factory(connection, request)
+    stream_ref["stream"] = stream
+
+    with anyio.fail_after(1):
+        await stream.aclose()
+
+    assert nested_completed.is_set()
+    assert connection.calls == 1
     assert connection.cleaned is True
 
 
