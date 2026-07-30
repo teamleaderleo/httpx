@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any
 
 import anyio
 import pytest
-
 from httpcore import Request
 from httpcore._async.http11 import HTTP11ConnectionByteStream
 from httpcore._async.http2 import HTTP2ConnectionByteStream
@@ -178,7 +179,9 @@ async def test_response_closed_trace_callback_can_reenter_close_without_cycle(
 @pytest.mark.anyio
 @pytest.mark.xfail(
     strict=True,
-    reason="HTTPCore publishes byte-stream closed state before delegated release settles",
+    reason=(
+        "HTTPCore publishes byte-stream closed state before delegated release settles"
+    ),
 )
 @pytest.mark.parametrize("stream_factory", [build_http11_stream, build_http2_stream])
 async def test_interrupted_delegated_close_should_remain_retryable(
