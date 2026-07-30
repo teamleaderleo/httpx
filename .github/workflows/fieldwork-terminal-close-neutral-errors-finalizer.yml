@@ -1,0 +1,81 @@
+name: Finalize terminal close neutral errors
+
+on:
+  push:
+    branches:
+      - repair/171-terminal-close-neutral-errors
+    paths:
+      - '.github/workflows/fieldwork-terminal-close-neutral-errors-finalizer.yml'
+      - '.fieldwork/apply_terminal_close_neutral_errors.py'
+      - '.fieldwork/test_async_response_close_terminal_unknown.py'
+      - '.fieldwork/fieldwork-terminal-close-neutral-errors.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-terminal-close-neutral-errors
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: repair/171-terminal-close-neutral-errors
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Verify exact source generation
+        run: |
+          test "$(git merge-base HEAD b5addb64f0161ff6bfe94c124ef76f6a1fba5254)" = b5addb64f0161ff6bfe94c124ef76f6a1fba5254
+          test "$(git hash-object httpx/_models.py)" = 2cc86321a4bc0915bd5e3886b3a69d551bbfc8d0
+
+      - name: Apply candidate and stage permanent files
+        run: |
+          python .fieldwork/apply_terminal_close_neutral_errors.py
+          cp .fieldwork/test_async_response_close_terminal_unknown.py \
+            tests/models/test_async_response_close_terminal_unknown.py
+          cp .fieldwork/fieldwork-terminal-close-neutral-errors.yml \
+            .github/workflows/fieldwork-terminal-close-neutral-errors.yml
+          git diff --check
+
+      - name: Install and execute candidate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt httpcore==1.0.9 anyio==4.12.1
+          pytest -q \
+            tests/models/test_async_response_close_terminal_unknown.py \
+            tests/models/test_responses.py \
+            -k 'terminal_unknown or aclose or cannot_aread_after_response_closed or pickle'
+          ruff check \
+            httpx/_models.py \
+            httpx/_client.py \
+            tests/models/test_async_response_close_terminal_unknown.py
+          mypy httpx
+          git diff --check
+
+      - name: Publish source-only candidate
+        run: |
+          rm -rf .fieldwork
+          rm .github/workflows/fieldwork-terminal-close-neutral-errors-finalizer.yml
+          git diff --check
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add \
+            httpx/_models.py \
+            httpx/_client.py \
+            tests/models/test_async_response_close_terminal_unknown.py \
+            .github/workflows/fieldwork-terminal-close-neutral-errors.yml \
+            .github/workflows/fieldwork-terminal-close-neutral-errors-finalizer.yml \
+            .fieldwork
+          git commit -m 'fix: make async close failures terminal and neutral'
+          git push origin HEAD:repair/171-terminal-close-neutral-errors
