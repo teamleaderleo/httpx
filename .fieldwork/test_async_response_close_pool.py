@@ -25,7 +25,9 @@ class BlockingDelegatingCloseStream(httpx.AsyncByteStream):
 
 
 @pytest.mark.anyio
-async def test_cancelled_close_retry_releases_default_transport_pool_slot(server) -> None:
+async def test_cancelled_close_retry_releases_default_transport_pool_slot(
+    server,
+) -> None:
     limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
     timeout = httpx.Timeout(5.0, pool=0.2)
 
