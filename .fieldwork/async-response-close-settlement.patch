@@ -1,0 +1,109 @@
+diff --git a/httpx/_client.py b/httpx/_client.py
+--- a/httpx/_client.py
++++ b/httpx/_client.py
+@@ -186,9 +186,9 @@ class BoundAsyncStream(AsyncByteStream):
+             yield chunk
+ 
+     async def aclose(self) -> None:
++        await self._stream.aclose()
+         elapsed = time.perf_counter() - self._start
+         self._response.elapsed = datetime.timedelta(seconds=elapsed)
+-        await self._stream.aclose()
+ 
+ 
+ EventHook = typing.Callable[..., typing.Any]
+diff --git a/httpx/_models.py b/httpx/_models.py
+--- a/httpx/_models.py
++++ b/httpx/_models.py
+@@ -10,6 +10,8 @@ import urllib.request
+ from collections.abc import Mapping
+ from http.cookiejar import Cookie, CookieJar
+ 
++import anyio
++
+ from ._content import ByteStream, UnattachedStream, encode_request, encode_response
+ from ._decoders import (
+     SUPPORTED_DECODERS,
+@@ -52,6 +54,13 @@ __all__ = ["Cookies", "Headers", "Request", "Response"]
+ SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
+ 
+ 
++class _AsyncCloseState:
++    def __init__(self) -> None:
++        self.event = anyio.Event()
++        self.error: BaseException | None = None
++
++
+ def _is_known_encoding(encoding: str) -> bool:
+     """
+     Return `True` if `encoding` is a known codec.
+@@ -533,6 +542,8 @@ class Response:
+ 
+         self.is_closed = False
+         self.is_stream_consumed = False
++        self._async_close_started = False
++        self._async_close_state: _AsyncCloseState | None = None
+ 
+         self.default_encoding = default_encoding
+ 
+@@ -874,13 +885,16 @@ class Response:
+         return {
+             name: value
+             for name, value in self.__dict__.items()
+-            if name not in ["extensions", "stream", "is_closed", "_decoder"]
++            if name
++            not in ["extensions", "stream", "is_closed", "_decoder", "_async_close_state"]
+         }
+ 
+     def __setstate__(self, state: dict[str, typing.Any]) -> None:
+         for name, value in state.items():
+             setattr(self, name, value)
+         self.is_closed = True
++        self._async_close_started = True
++        self._async_close_state = None
+         self.extensions = {}
+         self.stream = UnattachedStream()
+ 
+@@ -1039,7 +1053,7 @@ class Response:
+         """
+         if self.is_stream_consumed:
+             raise StreamConsumed()
+-        if self.is_closed:
++        if self.is_closed or self._async_close_started:
+             raise StreamClosed()
+         if not isinstance(self.stream, AsyncByteStream):
+             raise RuntimeError("Attempted to call an async iterator on a sync stream.")
+@@ -1069,8 +1083,32 @@ class Response:
+         if not isinstance(self.stream, AsyncByteStream):
+             raise RuntimeError("Attempted to call an async close on a sync stream.")
+ 
+-        if not self.is_closed:
+-            self.is_closed = True
+-            with request_context(request=self._request):
+-                await self.stream.aclose()
++        cancelled_exc_class = anyio.get_cancelled_exc_class()
++
++        while not self.is_closed:
++            state = self._async_close_state
++            if state is None:
++                state = _AsyncCloseState()
++                self._async_close_state = state
++                self._async_close_started = True
++                try:
++                    with request_context(request=self._request):
++                        await self.stream.aclose()
++                except BaseException as exc:
++                    if not isinstance(exc, cancelled_exc_class):
++                        state.error = exc
++                    self._async_close_state = None
++                    state.event.set()
++                    raise
++                else:
++                    self.is_closed = True
++                    self._async_close_state = None
++                    state.event.set()
++                    return
++
++            await state.event.wait()
++            if state.error is not None:
++                raise state.error
