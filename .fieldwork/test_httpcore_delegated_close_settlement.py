@@ -103,6 +103,7 @@ async def test_second_close_returns_before_delegated_release_finishes(
 ) -> None:
     connection = BlockingResponseClose()
     stream = stream_factory(connection)
+    second_completed = anyio.Event()
     completed: list[str] = []
 
     async def first_close() -> None:
@@ -112,12 +113,13 @@ async def test_second_close_returns_before_delegated_release_finishes(
     async def second_close() -> None:
         await stream.aclose()
         completed.append("second")
+        second_completed.set()
 
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(first_close)
         await connection.started.wait()
         task_group.start_soon(second_close)
-        await anyio.sleep(0)
+        await second_completed.wait()
 
         assert connection.calls == 1
         assert completed == ["second"]
