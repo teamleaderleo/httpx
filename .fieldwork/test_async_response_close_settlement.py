@@ -63,6 +63,14 @@ class BlockingFailOnceCloseStream(httpx.AsyncByteStream):
         self.cleaned = True
 
 
+class SingleResponseTransport(httpx.AsyncBaseTransport):
+    def __init__(self, stream: httpx.AsyncByteStream) -> None:
+        self.stream = stream
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=self.stream)
+
+
 @pytest.mark.anyio
 async def test_cancelled_close_remains_retryable() -> None:
     stream = BlockingCloseStream()
@@ -269,6 +277,36 @@ async def test_repeated_successful_close_is_idempotent() -> None:
 
 
 @pytest.mark.anyio
+async def test_cancelled_stream_context_exit_leaves_response_retryable() -> None:
+    stream = BlockingCloseStream()
+    client = httpx.AsyncClient(transport=SingleResponseTransport(stream))
+    context = client.stream("GET", "https://example.org")
+    response = await context.__aenter__()
+    cancel_scope = anyio.CancelScope()
+
+    async def exit_once() -> None:
+        with cancel_scope:
+            await context.__aexit__(None, None, None)
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(exit_once)
+        await stream.started.wait()
+        cancel_scope.cancel()
+
+    assert response.is_closed is False
+    assert stream.close_calls == 1
+    assert stream.cleaned is False
+
+    stream.release.set()
+    await response.aclose()
+    await client.aclose()
+
+    assert response.is_closed is True
+    assert stream.close_calls == 2
+    assert stream.cleaned is True
+
+
+@pytest.mark.anyio
 async def test_elapsed_is_finalized_only_after_close_completes() -> None:
     stream = BlockingCloseStream()
     response = httpx.Response(200, stream=stream)
@@ -283,6 +321,26 @@ async def test_elapsed_is_finalized_only_after_close_completes() -> None:
             response.elapsed  # noqa: B018
 
         stream.release.set()
+
+    assert response.is_closed is True
+    assert response.elapsed.total_seconds() >= 0
+
+
+@pytest.mark.anyio
+async def test_elapsed_remains_unavailable_after_close_failure() -> None:
+    error = RuntimeError("close failed")
+    stream = FailOnceCloseStream(error)
+    response = httpx.Response(200, stream=stream)
+    response.stream = BoundAsyncStream(stream, response, time.perf_counter())
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await response.aclose()
+
+    assert response.is_closed is False
+    with pytest.raises(RuntimeError, match="may only be accessed"):
+        response.elapsed  # noqa: B018
+
+    await response.aclose()
 
     assert response.is_closed is True
     assert response.elapsed.total_seconds() >= 0
