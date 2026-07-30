@@ -1,0 +1,55 @@
+name: Fieldwork async response close settlement
+
+on:
+  pull_request:
+    paths:
+      - '.fieldwork/async-response-close-settlement.patch'
+      - '.fieldwork/test_async_response_close_settlement.py'
+      - '.github/workflows/fieldwork-async-response-close-settlement.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - '3.9'
+          - '3.13'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install focused dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest==8.4.1 trio==0.31.0 chardet==5.2.0 ruff==0.12.11 mypy==1.17.1
+
+      - name: Apply exact candidate
+        run: |
+          git apply --check .fieldwork/async-response-close-settlement.patch
+          git apply .fieldwork/async-response-close-settlement.patch
+          cp .fieldwork/test_async_response_close_settlement.py tests/models/test_async_response_close_settlement.py
+          git diff --check
+
+      - name: Run close-settlement regressions
+        run: |
+          pytest -q tests/models/test_async_response_close_settlement.py
+
+      - name: Run adjacent response and client controls
+        run: |
+          pytest -q tests/models/test_responses.py tests/client/test_async_client.py -k 'aclose or async_streaming_response or cannot_aread_after_response_closed or elapsed_not_available_until_closed or stream'
+
+      - name: Static checks
+        run: |
+          ruff check httpx/_models.py httpx/_client.py tests/models/test_async_response_close_settlement.py
+          mypy httpx
