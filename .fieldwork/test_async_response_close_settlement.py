@@ -91,6 +91,27 @@ async def test_cancelled_close_remains_retryable() -> None:
 
 
 @pytest.mark.anyio
+async def test_already_cancelled_close_remains_retryable() -> None:
+    stream = BlockingCloseStream()
+    response = httpx.Response(200, stream=stream)
+
+    with anyio.CancelScope() as cancel_scope:
+        cancel_scope.cancel()
+        await response.aclose()
+
+    assert response.is_closed is False
+    assert stream.close_calls == 1
+    assert stream.cleaned is False
+
+    stream.release.set()
+    await response.aclose()
+
+    assert response.is_closed is True
+    assert stream.close_calls == 2
+    assert stream.cleaned is True
+
+
+@pytest.mark.anyio
 async def test_close_failure_remains_retryable() -> None:
     error = RuntimeError("close failed")
     stream = FailOnceCloseStream(error)
@@ -192,7 +213,8 @@ async def test_close_failure_is_shared_with_current_waiters() -> None:
         assert stream.close_calls == 1
         stream.release.set()
 
-    assert errors == [error, error]
+    assert len(errors) == 2
+    assert all(exc is error for exc in errors)
     assert response.is_closed is False
     assert stream.close_calls == 1
 
@@ -230,6 +252,20 @@ async def test_close_start_blocks_new_body_iteration() -> None:
     stream.release.set()
     await response.aclose()
     assert response.is_closed is True
+
+
+@pytest.mark.anyio
+async def test_repeated_successful_close_is_idempotent() -> None:
+    stream = BlockingCloseStream()
+    stream.release.set()
+    response = httpx.Response(200, stream=stream)
+
+    await response.aclose()
+    await response.aclose()
+
+    assert response.is_closed is True
+    assert stream.close_calls == 1
+    assert stream.cleaned is True
 
 
 @pytest.mark.anyio
