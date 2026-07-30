@@ -73,7 +73,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
              raise StreamClosed()
          if not isinstance(self.stream, AsyncByteStream):
              raise RuntimeError("Attempted to call an async iterator on a sync stream.")
-@@ -1069,7 +1082,27 @@ class Response:
+@@ -1069,6 +1082,26 @@ class Response:
          if not isinstance(self.stream, AsyncByteStream):
              raise RuntimeError("Attempted to call an async close on a sync stream.")
  
