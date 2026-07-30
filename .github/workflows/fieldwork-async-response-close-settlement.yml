@@ -5,6 +5,7 @@ on:
     paths:
       - '.fieldwork/async-response-close-settlement.patch'
       - '.fieldwork/test_async_response_close_settlement.py'
+      - '.fieldwork/test_async_response_close_control_flow.py'
       - '.fieldwork/test_async_response_close_pool.py'
       - '.github/workflows/fieldwork-async-response-close-settlement.yml'
   workflow_dispatch:
@@ -40,6 +41,7 @@ jobs:
           git apply --check .fieldwork/async-response-close-settlement.patch
           git apply .fieldwork/async-response-close-settlement.patch
           cp .fieldwork/test_async_response_close_settlement.py tests/models/test_async_response_close_settlement.py
+          cp .fieldwork/test_async_response_close_control_flow.py tests/models/test_async_response_close_control_flow.py
           cp .fieldwork/test_async_response_close_pool.py tests/client/test_async_response_close_pool.py
           git diff --check
 
@@ -47,6 +49,7 @@ jobs:
         run: |
           pytest -q \
             tests/models/test_async_response_close_settlement.py \
+            tests/models/test_async_response_close_control_flow.py \
             tests/client/test_async_response_close_pool.py
 
       - name: Run adjacent response and client controls
@@ -59,5 +62,6 @@ jobs:
             httpx/_models.py \
             httpx/_client.py \
             tests/models/test_async_response_close_settlement.py \
+            tests/models/test_async_response_close_control_flow.py \
             tests/client/test_async_response_close_pool.py
           mypy httpx
