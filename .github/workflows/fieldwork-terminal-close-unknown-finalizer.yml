@@ -1,0 +1,472 @@
+name: Fieldwork terminal close outcome finalizer
+
+on:
+  push:
+    branches:
+      - fieldwork/171-terminal-close-unknown
+    paths:
+      - '.github/workflows/fieldwork-terminal-close-unknown-finalizer.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-terminal-close-unknown-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fieldwork/171-terminal-close-unknown
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Verify exact source generation
+        run: |
+          test "$(git rev-parse HEAD^)" = b5addb64f0161ff6bfe94c124ef76f6a1fba5254
+          test "$(git hash-object httpx/_models.py)" = 2cc86321a4bc0915bd5e3886b3a69d551bbfc8d0
+
+      - name: Apply terminal outcome candidate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: source anchor moved')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          client = Path('httpx/_client.py')
+          models = Path('httpx/_models.py')
+
+          replace_exact(
+              client,
+              '''    async def aclose(self) -> None:
+                  elapsed = time.perf_counter() - self._start
+                  self._response.elapsed = datetime.timedelta(seconds=elapsed)
+                  await self._stream.aclose()
+          ''',
+              '''    async def aclose(self) -> None:
+                  await self._stream.aclose()
+                  elapsed = time.perf_counter() - self._start
+                  self._response.elapsed = datetime.timedelta(seconds=elapsed)
+          ''',
+              'elapsed ordering',
+          )
+
+          replace_exact(
+              models,
+              '''from collections.abc import Mapping
+          from http.cookiejar import Cookie, CookieJar
+
+          from ._content import ByteStream, UnattachedStream, encode_request, encode_response
+          ''',
+              '''from collections.abc import Mapping
+          from http.cookiejar import Cookie, CookieJar
+
+          import anyio
+
+          from ._content import ByteStream, UnattachedStream, encode_request, encode_response
+          ''',
+              'AnyIO import',
+          )
+
+          replace_exact(
+              models,
+              '''    CookieConflict,
+              HTTPStatusError,
+          ''',
+              '''    CloseError,
+              CookieConflict,
+              HTTPStatusError,
+          ''',
+              'CloseError import',
+          )
+
+          replace_exact(
+              models,
+              '''SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
+
+
+          def _is_known_encoding(encoding: str) -> bool:
+          ''',
+              '''SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
+
+
+          class _AsyncCloseState:
+              def __init__(self) -> None:
+                  self.event = anyio.Event()
+                  self.failure: CloseError | None = None
+
+
+          def _is_known_encoding(encoding: str) -> bool:
+          ''',
+              'close state',
+          )
+
+          replace_exact(
+              models,
+              '''        self.is_closed = False
+                  self.is_stream_consumed = False
+
+                  self.default_encoding = default_encoding
+          ''',
+              '''        self.is_closed = False
+                  self.is_stream_consumed = False
+                  self._async_close_started = False
+                  self._async_close_state: _AsyncCloseState | None = None
+                  self._async_close_failure: CloseError | None = None
+
+                  self.default_encoding = default_encoding
+          ''',
+              'response fields',
+          )
+
+          replace_exact(
+              models,
+              '''    def __getstate__(self) -> dict[str, typing.Any]:
+                  return {
+                      name: value
+                      for name, value in self.__dict__.items()
+                      if name not in ["extensions", "stream", "is_closed", "_decoder"]
+                  }
+
+              def __setstate__(self, state: dict[str, typing.Any]) -> None:
+                  for name, value in state.items():
+                      setattr(self, name, value)
+                  self.is_closed = True
+                  self.extensions = {}
+                  self.stream = UnattachedStream()
+          ''',
+              '''    def __getstate__(self) -> dict[str, typing.Any]:
+                  return {
+                      name: value
+                      for name, value in self.__dict__.items()
+                      if name
+                      not in [
+                          "extensions",
+                          "stream",
+                          "is_closed",
+                          "_decoder",
+                          "_async_close_state",
+                          "_async_close_failure",
+                      ]
+                  }
+
+              def __setstate__(self, state: dict[str, typing.Any]) -> None:
+                  for name, value in state.items():
+                      setattr(self, name, value)
+                  self.is_closed = True
+                  self._async_close_started = True
+                  self._async_close_state = None
+                  self._async_close_failure = None
+                  self.extensions = {}
+                  self.stream = UnattachedStream()
+          ''',
+              'pickle state',
+          )
+
+          replace_exact(
+              models,
+              '''        if self.is_stream_consumed:
+                      raise StreamConsumed()
+                  if self.is_closed:
+                      raise StreamClosed()
+                  if not isinstance(self.stream, AsyncByteStream):
+          ''',
+              '''        if self.is_stream_consumed:
+                      raise StreamConsumed()
+                  if self.is_closed or self._async_close_started:
+                      raise StreamClosed()
+                  if not isinstance(self.stream, AsyncByteStream):
+          ''',
+              'body close barrier',
+          )
+
+          replace_exact(
+              models,
+              '''        if not isinstance(self.stream, AsyncByteStream):
+                      raise RuntimeError("Attempted to call an async close on a sync stream.")
+
+                  if not self.is_closed:
+                      self.is_closed = True
+                      with request_context(request=self._request):
+                          await self.stream.aclose()
+          ''',
+              '''        if not isinstance(self.stream, AsyncByteStream):
+                      raise RuntimeError("Attempted to call an async close on a sync stream.")
+
+                  if self.is_closed:
+                      return
+                  if self._async_close_failure is not None:
+                      raise self._async_close_failure
+
+                  state = self._async_close_state
+                  if state is None:
+                      state = _AsyncCloseState()
+                      self._async_close_state = state
+                      self._async_close_started = True
+                      try:
+                          with request_context(request=self._request):
+                              await self.stream.aclose()
+                      except BaseException as exc:
+                          failure = CloseError(
+                              "Response close outcome is unknown after stream cleanup failed.",
+                              request=self._request,
+                          )
+                          failure.__cause__ = exc
+                          self._async_close_failure = failure
+                          state.failure = failure
+                          self._async_close_state = None
+                          state.event.set()
+                          raise
+                      else:
+                          self.is_closed = True
+                          self._async_close_state = None
+                          state.event.set()
+                          return
+
+                  await state.event.wait()
+                  if state.failure is not None:
+                      raise state.failure
+          ''',
+              'terminal response close ownership',
+          )
+          PY
+
+          cat > tests/models/test_async_response_close_terminal_unknown.py <<'PY'
+          import anyio
+          import pytest
+
+          import httpx
+
+
+          class ControlFlowAbort(BaseException):
+              pass
+
+
+          class CommitThenRaiseStream(httpx.AsyncByteStream):
+              def __init__(self, error: BaseException) -> None:
+                  self.error = error
+                  self.started = anyio.Event()
+                  self.release = anyio.Event()
+                  self.close_calls = 0
+                  self.cleanup_commits = 0
+
+              async def __aiter__(self):
+                  if False:
+                      yield b""
+
+              async def aclose(self) -> None:
+                  self.close_calls += 1
+                  self.started.set()
+                  await self.release.wait()
+                  self.cleanup_commits += 1
+                  raise self.error
+
+
+          class SuccessfulBlockingStream(httpx.AsyncByteStream):
+              def __init__(self) -> None:
+                  self.started = anyio.Event()
+                  self.release = anyio.Event()
+                  self.close_calls = 0
+
+              async def __aiter__(self):
+                  if False:
+                      yield b""
+
+              async def aclose(self) -> None:
+                  self.close_calls += 1
+                  self.started.set()
+                  await self.release.wait()
+
+
+          @pytest.mark.anyio
+          @pytest.mark.parametrize(
+              "error",
+              [RuntimeError("ordinary close failed"), ControlFlowAbort("caller aborted")],
+          )
+          async def test_waiters_observe_one_neutral_terminal_failure(
+              error: BaseException,
+          ) -> None:
+              stream = CommitThenRaiseStream(error)
+              response = httpx.Response(200, stream=stream)
+              owner_errors: list[BaseException] = []
+              waiter_errors: list[httpx.CloseError] = []
+
+              async def owner() -> None:
+                  try:
+                      await response.aclose()
+                  except BaseException as exc:
+                      owner_errors.append(exc)
+
+              async def waiter() -> None:
+                  try:
+                      await response.aclose()
+                  except httpx.CloseError as exc:
+                      waiter_errors.append(exc)
+
+              async with anyio.create_task_group() as task_group:
+                  task_group.start_soon(owner)
+                  await stream.started.wait()
+                  task_group.start_soon(waiter)
+                  task_group.start_soon(waiter)
+                  await anyio.sleep(0)
+                  stream.release.set()
+
+              assert owner_errors == [error]
+              assert len(waiter_errors) == 2
+              assert waiter_errors[0] is waiter_errors[1]
+              assert waiter_errors[0].__cause__ is error
+              assert stream.close_calls == 1
+              assert stream.cleanup_commits == 1
+              assert response.is_closed is False
+
+              with pytest.raises(httpx.CloseError) as later:
+                  await response.aclose()
+              assert later.value is waiter_errors[0]
+              assert stream.close_calls == 1
+
+              iterator = response.aiter_raw()
+              with pytest.raises(httpx.StreamClosed):
+                  await iterator.__anext__()
+
+
+          @pytest.mark.anyio
+          async def test_successful_waiters_share_one_close_attempt() -> None:
+              stream = SuccessfulBlockingStream()
+              response = httpx.Response(200, stream=stream)
+              completed = 0
+
+              async def close() -> None:
+                  nonlocal completed
+                  await response.aclose()
+                  completed += 1
+
+              async with anyio.create_task_group() as task_group:
+                  task_group.start_soon(close)
+                  await stream.started.wait()
+                  task_group.start_soon(close)
+                  task_group.start_soon(close)
+                  await anyio.sleep(0)
+                  stream.release.set()
+
+              assert completed == 3
+              assert stream.close_calls == 1
+              assert response.is_closed is True
+              await response.aclose()
+              assert stream.close_calls == 1
+
+
+          @pytest.mark.anyio
+          async def test_later_retry_does_not_repeat_committed_cleanup() -> None:
+              error = RuntimeError("cleanup committed")
+              stream = CommitThenRaiseStream(error)
+              response = httpx.Response(200, stream=stream)
+
+              async def release() -> None:
+                  await stream.started.wait()
+                  stream.release.set()
+
+              async with anyio.create_task_group() as task_group:
+                  task_group.start_soon(release)
+                  with pytest.raises(RuntimeError) as owner:
+                      await response.aclose()
+              assert owner.value is error
+
+              with pytest.raises(httpx.CloseError) as later:
+                  await response.aclose()
+              assert later.value.__cause__ is error
+              assert stream.close_calls == 1
+              assert stream.cleanup_commits == 1
+          PY
+
+          cat > .github/workflows/fieldwork-terminal-close-unknown.yml <<'YML'
+          name: Fieldwork terminal close outcome
+
+          on:
+            pull_request:
+              paths:
+                - 'httpx/_models.py'
+                - 'httpx/_client.py'
+                - 'tests/models/test_async_response_close_terminal_unknown.py'
+                - '.github/workflows/fieldwork-terminal-close-unknown.yml'
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            focused:
+              name: Python ${{ matrix.python-version }}
+              runs-on: ubuntu-24.04
+              strategy:
+                fail-fast: false
+                matrix:
+                  python-version: ['3.9', '3.13']
+              steps:
+                - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+                  with:
+                    persist-credentials: false
+                - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+                  with:
+                    python-version: ${{ matrix.python-version }}
+                    cache: pip
+                - run: |
+                    python -m pip install --upgrade pip
+                    python -m pip install -r requirements.txt httpcore==1.0.9 anyio==4.12.1
+                - run: |
+                    pytest -q \
+                      tests/models/test_async_response_close_terminal_unknown.py \
+                      tests/models/test_responses.py \
+                      -k 'terminal_unknown or aclose or cannot_aread_after_response_closed or pickle'
+                - run: |
+                    ruff check \
+                      httpx/_models.py \
+                      httpx/_client.py \
+                      tests/models/test_async_response_close_terminal_unknown.py
+                    mypy httpx
+                    git diff --check
+          YML
+
+          git diff --check
+
+      - name: Install and execute direct candidate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt httpcore==1.0.9 anyio==4.12.1
+          pytest -q \
+            tests/models/test_async_response_close_terminal_unknown.py \
+            tests/models/test_responses.py \
+            -k 'terminal_unknown or aclose or cannot_aread_after_response_closed or pickle'
+          ruff check \
+            httpx/_models.py \
+            httpx/_client.py \
+            tests/models/test_async_response_close_terminal_unknown.py
+          mypy httpx
+          git diff --check
+
+      - name: Publish source-only candidate
+        run: |
+          rm .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add \
+            httpx/_models.py \
+            httpx/_client.py \
+            tests/models/test_async_response_close_terminal_unknown.py \
+            .github/workflows/fieldwork-terminal-close-unknown.yml \
+            .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml
+          git diff --cached --quiet && exit 1
+          git commit -m 'fix: make async response close failure terminal and shared'
+          git push origin HEAD:fieldwork/171-terminal-close-unknown
