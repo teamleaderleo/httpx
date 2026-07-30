@@ -5,6 +5,7 @@ from typing import Any
 
 import anyio
 import pytest
+
 from httpcore import Request
 from httpcore._async.http11 import HTTP11ConnectionByteStream
 from httpcore._async.http2 import HTTP2ConnectionByteStream
