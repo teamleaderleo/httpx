@@ -1,0 +1,121 @@
+name: Fieldwork publish terminal close source
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/fieldwork-terminal-close-unknown-publish-pr.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-terminal-close-unknown-publish-pr
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fieldwork/171-terminal-close-unknown'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fieldwork/171-terminal-close-unknown
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact publisher generation
+        run: |
+          test "$(git rev-parse HEAD^)" = 7c4cd42e0d80d79850ee0e8c54cefbd0afaec039
+          test "$(git hash-object httpx/_models.py)" = 2cc86321a4bc0915bd5e3886b3a69d551bbfc8d0
+          test "$(git hash-object .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml)" = b8bfec62cd18f9cf11838bd5ae9d3d6c90da9b14
+          test -f .github/workflows/fieldwork-terminal-close-unknown-repair.yml
+
+      - name: Reuse reviewed materialization block
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path(
+              '.github/workflows/fieldwork-terminal-close-unknown-repair.yml'
+          ).read_text(encoding='utf-8')
+          start = (
+              '      - name: Materialize repaired source and regression tests\n'
+              '        run: |\n'
+          )
+          end = '\n      - name: Create source-only exact head\n'
+          if workflow.count(start) != 1 or workflow.count(end) != 1:
+              raise SystemExit('reviewed materialization block moved')
+          block = workflow.split(start, 1)[1].split(end, 1)[0]
+          script_lines = []
+          for line in block.splitlines():
+              if line.startswith('          '):
+                  script_lines.append(line[10:])
+              elif line:
+                  raise SystemExit(f'unexpected block indentation: {line!r}')
+              else:
+                  script_lines.append('')
+          script = '\n'.join(script_lines) + '\n'
+          Path('/tmp/materialize-terminal-close.sh').write_text(
+              script, encoding='utf-8'
+          )
+          subprocess.run(
+              ['bash', '/tmp/materialize-terminal-close.sh'], check=True
+          )
+          PY
+
+          rm .github/workflows/fieldwork-terminal-close-unknown-publish-pr.yml
+          git diff --check
+
+      - name: Create source-only exact head
+        run: |
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && exit 1
+          git commit -m 'fix: make async response close failure terminal'
+          echo "SOURCE_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --exit-code
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.9'
+          cache: pip
+
+      - name: Python 3.9 focused exact-head validation
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt httpcore==1.0.9 anyio==4.12.1
+          pytest -q \
+            tests/models/test_async_response_close_terminal_unknown.py \
+            tests/models/test_responses.py \
+            -k 'terminal_unknown or aclose or cannot_aread_after_response_closed or pickle'
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Python 3.13 full exact-head validation
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt httpcore==1.0.9 anyio==4.12.1
+          pytest -q
+          ruff check \
+            httpx/_models.py \
+            httpx/_client.py \
+            tests/models/test_async_response_close_terminal_unknown.py
+          mypy httpx
+          git diff --exit-code
+
+      - name: Publish validated source-only head
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git push origin HEAD:fieldwork/171-terminal-close-unknown
