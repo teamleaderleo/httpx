@@ -24,7 +24,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
  from ._content import ByteStream, UnattachedStream, encode_request, encode_response
  from ._decoders import (
      SUPPORTED_DECODERS,
-@@ -52,6 +54,13 @@ __all__ = ["Cookies", "Headers", "Request", "Response"]
+@@ -52,6 +54,12 @@ __all__ = ["Cookies", "Headers", "Request", "Response"]
  SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
  
  
@@ -37,7 +37,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
  def _is_known_encoding(encoding: str) -> bool:
      """
      Return `True` if `encoding` is a known codec.
-@@ -533,6 +542,8 @@ class Response:
+@@ -533,6 +541,8 @@ class Response:
  
          self.is_closed = False
          self.is_stream_consumed = False
@@ -46,7 +46,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
  
          self.default_encoding = default_encoding
  
-@@ -874,13 +885,16 @@ class Response:
+@@ -874,13 +884,16 @@ class Response:
          return {
              name: value
              for name, value in self.__dict__.items()
@@ -64,7 +64,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
          self.extensions = {}
          self.stream = UnattachedStream()
  
-@@ -1039,7 +1053,7 @@ class Response:
+@@ -1039,7 +1052,7 @@ class Response:
          """
          if self.is_stream_consumed:
              raise StreamConsumed()
@@ -73,7 +73,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
              raise StreamClosed()
          if not isinstance(self.stream, AsyncByteStream):
              raise RuntimeError("Attempted to call an async iterator on a sync stream.")
-@@ -1069,8 +1083,32 @@ class Response:
+@@ -1069,7 +1082,27 @@ class Response:
          if not isinstance(self.stream, AsyncByteStream):
              raise RuntimeError("Attempted to call an async close on a sync stream.")
  
@@ -81,8 +81,6 @@ diff --git a/httpx/_models.py b/httpx/_models.py
 -            self.is_closed = True
 -            with request_context(request=self._request):
 -                await self.stream.aclose()
-+        cancelled_exc_class = anyio.get_cancelled_exc_class()
-+
 +        while not self.is_closed:
 +            state = self._async_close_state
 +            if state is None:
@@ -93,7 +91,7 @@ diff --git a/httpx/_models.py b/httpx/_models.py
 +                    with request_context(request=self._request):
 +                        await self.stream.aclose()
 +                except BaseException as exc:
-+                    if not isinstance(exc, cancelled_exc_class):
++                    if isinstance(exc, Exception):
 +                        state.error = exc
 +                    self._async_close_state = None
 +                    state.event.set()
