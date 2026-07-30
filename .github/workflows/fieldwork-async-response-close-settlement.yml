@@ -6,6 +6,7 @@ on:
       - '.fieldwork/async-response-close-settlement.patch'
       - '.fieldwork/test_async_response_close_settlement.py'
       - '.fieldwork/test_async_response_close_control_flow.py'
+      - '.fieldwork/test_async_response_close_pickle.py'
       - '.fieldwork/test_async_response_close_pool.py'
       - '.github/workflows/fieldwork-async-response-close-settlement.yml'
   workflow_dispatch:
@@ -42,6 +43,7 @@ jobs:
           git apply .fieldwork/async-response-close-settlement.patch
           cp .fieldwork/test_async_response_close_settlement.py tests/models/test_async_response_close_settlement.py
           cp .fieldwork/test_async_response_close_control_flow.py tests/models/test_async_response_close_control_flow.py
+          cp .fieldwork/test_async_response_close_pickle.py tests/models/test_async_response_close_pickle.py
           cp .fieldwork/test_async_response_close_pool.py tests/client/test_async_response_close_pool.py
           git diff --check
 
@@ -50,11 +52,12 @@ jobs:
           pytest -q \
             tests/models/test_async_response_close_settlement.py \
             tests/models/test_async_response_close_control_flow.py \
+            tests/models/test_async_response_close_pickle.py \
             tests/client/test_async_response_close_pool.py
 
       - name: Run adjacent response and client controls
         run: |
-          pytest -q tests/models/test_responses.py tests/client/test_async_client.py -k 'aclose or async_streaming_response or cannot_aread_after_response_closed or elapsed_not_available_until_closed or stream'
+          pytest -q tests/models/test_responses.py tests/client/test_async_client.py -k 'aclose or async_streaming_response or cannot_aread_after_response_closed or elapsed_not_available_until_closed or stream or pickle'
 
       - name: Static checks
         run: |
@@ -63,5 +66,6 @@ jobs:
             httpx/_client.py \
             tests/models/test_async_response_close_settlement.py \
             tests/models/test_async_response_close_control_flow.py \
+            tests/models/test_async_response_close_pickle.py \
             tests/client/test_async_response_close_pool.py
           mypy httpx
