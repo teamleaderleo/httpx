@@ -1,0 +1,195 @@
+name: Fieldwork repair terminal close finalizer
+
+on:
+  push:
+    branches:
+      - fieldwork/171-terminal-close-unknown
+    paths:
+      - '.github/workflows/fieldwork-terminal-close-unknown-repair.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-terminal-close-unknown-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fieldwork/171-terminal-close-unknown
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify blocked carrier head
+        run: |
+          test "$(git rev-parse HEAD^)" = 5bb3142b048bbf3067a9469dab297d1f0b0908d3
+          test "$(git hash-object .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml)" = b8bfec62cd18f9cf11838bd5ae9d3d6c90da9b14
+
+      - name: Repair finalizer and regression contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/fieldwork-terminal-close-unknown-finalizer.yml')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected one match, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "    if: github.actor != 'github-actions[bot]'\n",
+              "",
+              'allow repaired finalizer bot run',
+          )
+          replace_once(
+              '          test "$(git rev-parse HEAD^)" = b5addb64f0161ff6bfe94c124ef76f6a1fba5254\n',
+              '          git merge-base --is-ancestor b5addb64f0161ff6bfe94c124ef76f6a1fba5254 HEAD\n',
+              'source generation check',
+          )
+          replace_once(
+              '                  self.failure: CloseError | None = None\n',
+              '                  self.failure: BaseException | None = None\n',
+              'waiter failure record type',
+          )
+          replace_once(
+              '                  self._async_close_failure: CloseError | None = None\n',
+              '                  self._async_close_failure: BaseException | None = None\n',
+              'terminal failure record type',
+          )
+          replace_once(
+              '''                  if self._async_close_failure is not None:
+                      raise self._async_close_failure
+''',
+              '''                  if self._async_close_failure is not None:
+                      failure = CloseError(
+                          "Response close outcome is unknown after stream cleanup failed.",
+                          request=self._request,
+                      )
+                      failure.__cause__ = self._async_close_failure
+                      raise failure
+''',
+              'later observer fresh exception',
+          )
+          replace_once(
+              '''                      except BaseException as exc:
+                          failure = CloseError(
+                              "Response close outcome is unknown after stream cleanup failed.",
+                              request=self._request,
+                          )
+                          failure.__cause__ = exc
+                          self._async_close_failure = failure
+                          state.failure = failure
+''',
+              '''                      except BaseException as exc:
+                          self._async_close_failure = exc
+                          state.failure = exc
+''',
+              'store initiating cause',
+          )
+          replace_once(
+              '''                  await state.event.wait()
+                  if state.failure is not None:
+                      raise state.failure
+''',
+              '''                  await state.event.wait()
+                  if state.failure is not None:
+                      failure = CloseError(
+                          "Response close outcome is unknown after stream cleanup failed.",
+                          request=self._request,
+                      )
+                      failure.__cause__ = state.failure
+                      raise failure
+''',
+              'waiter fresh exception',
+          )
+          replace_once(
+              '''          import httpx
+
+
+          class ControlFlowAbort(BaseException):
+''',
+              '''          import httpx
+
+
+          def traceback_depth(exc: BaseException) -> int:
+              depth = 0
+              traceback = exc.__traceback__
+              while traceback is not None:
+                  depth += 1
+                  traceback = traceback.tb_next
+              return depth
+
+
+          class ControlFlowAbort(BaseException):
+''',
+              'traceback helper',
+          )
+          replace_once(
+              '''              assert len(waiter_errors) == 2
+              assert waiter_errors[0] is waiter_errors[1]
+              assert waiter_errors[0].__cause__ is error
+''',
+              '''              assert len(waiter_errors) == 2
+              assert waiter_errors[0] is not waiter_errors[1]
+              assert waiter_errors[0].args == waiter_errors[1].args
+              assert waiter_errors[0].__cause__ is error
+              assert waiter_errors[1].__cause__ is error
+              assert waiter_errors[0].__traceback__ is not waiter_errors[1].__traceback__
+''',
+              'waiter exception isolation assertions',
+          )
+          replace_once(
+              '''              with pytest.raises(httpx.CloseError) as later:
+                  await response.aclose()
+              assert later.value is waiter_errors[0]
+              assert stream.close_calls == 1
+''',
+              '''              waiter_depths = [traceback_depth(exc) for exc in waiter_errors]
+              with pytest.raises(httpx.CloseError) as later:
+                  await response.aclose()
+              assert later.value is not waiter_errors[0]
+              assert later.value is not waiter_errors[1]
+              assert later.value.__cause__ is error
+              later_depth = traceback_depth(later.value)
+
+              with pytest.raises(httpx.CloseError) as repeated:
+                  await response.aclose()
+              assert repeated.value is not later.value
+              assert repeated.value.__cause__ is error
+              assert traceback_depth(repeated.value) == later_depth
+              assert [traceback_depth(exc) for exc in waiter_errors] == waiter_depths
+              assert stream.close_calls == 1
+''',
+              'later exception isolation assertions',
+          )
+          replace_once(
+              "          git commit -m 'fix: make async response close failure terminal and shared'\n",
+              "          git commit -m 'fix: make async response close failure terminal'\n",
+              'source commit wording',
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          rm .github/workflows/fieldwork-terminal-close-unknown-repair.yml
+          git diff --check
+
+      - name: Publish repaired finalizer
+        run: |
+          git config user.name fieldwork-ci
+          git config user.email fieldwork-ci@users.noreply.github.com
+          git add \
+            .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml \
+            .github/workflows/fieldwork-terminal-close-unknown-repair.yml
+          git diff --cached --quiet && exit 1
+          git commit -m 'ci: isolate terminal close observer exceptions'
+          git push origin HEAD:fieldwork/171-terminal-close-unknown
