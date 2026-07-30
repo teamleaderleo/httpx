@@ -1,0 +1,52 @@
+name: Fieldwork sync response close settlement
+
+on:
+  pull_request:
+    paths:
+      - '.fieldwork/test_sync_response_close_settlement.py'
+      - '.github/workflows/fieldwork-sync-response-close-settlement.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - '3.9'
+          - '3.13'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install focused dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest==8.4.1 chardet==5.2.0 ruff==0.12.11 mypy==1.17.1
+
+      - name: Stage characterization
+        run: |
+          cp .fieldwork/test_sync_response_close_settlement.py tests/models/test_sync_response_close_settlement.py
+          git diff --check
+
+      - name: Run focused characterization
+        run: |
+          pytest -q -rxX tests/models/test_sync_response_close_settlement.py
+
+      - name: Run adjacent response controls
+        run: |
+          pytest -q tests/models/test_responses.py -k 'close or sync_streaming_response or cannot_read_after_response_closed'
+
+      - name: Static checks
+        run: |
+          ruff check httpx/_models.py tests/models/test_sync_response_close_settlement.py
+          mypy httpx
