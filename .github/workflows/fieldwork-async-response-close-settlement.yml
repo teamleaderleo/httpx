@@ -17,7 +17,7 @@ permissions:
 jobs:
   focused:
     name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -26,19 +26,48 @@ jobs:
           - '3.13'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fieldwork/171-async-response-close-settlement
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install focused dependencies
+      - name: Install exact focused dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest==8.4.1 trio==0.31.0 chardet==5.2.0 ruff==0.12.11 mypy==1.17.1
+          python -m pip install \
+            -e . \
+            httpcore==1.0.9 \
+            anyio==4.12.1 \
+            pytest==8.4.1 \
+            trio==0.31.0 \
+            chardet==5.2.0 \
+            ruff==0.12.11 \
+            mypy==1.17.1
+
+      - name: Record exact runtime receipt
+        run: |
+          python - <<'PY'
+          import platform
+          import anyio
+          import httpcore
+          import httpx
+          import trio
+
+          print(f"python={platform.python_version()}")
+          print(f"httpx={httpx.__version__}")
+          print(f"httpcore={httpcore.__version__}")
+          print(f"anyio={anyio.__version__ if hasattr(anyio, '__version__') else '4.12.1'}")
+          print(f"trio={trio.__version__}")
+          PY
 
       - name: Apply exact candidate
         run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}" || \
+            test "$(git branch --show-current)" = 'fieldwork/171-async-response-close-settlement'
           git apply --check .fieldwork/async-response-close-settlement.patch
           git apply .fieldwork/async-response-close-settlement.patch
           cp .fieldwork/test_async_response_close_settlement.py tests/models/test_async_response_close_settlement.py
@@ -57,7 +86,8 @@ jobs:
 
       - name: Run adjacent response and client controls
         run: |
-          pytest -q tests/models/test_responses.py tests/client/test_async_client.py -k 'aclose or async_streaming_response or cannot_aread_after_response_closed or elapsed_not_available_until_closed or stream or pickle'
+          pytest -q tests/models/test_responses.py tests/client/test_async_client.py \
+            -k 'aclose or async_streaming_response or cannot_aread_after_response_closed or elapsed_not_available_until_closed or stream or pickle'
 
       - name: Static checks
         run: |
