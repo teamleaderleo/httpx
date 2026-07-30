@@ -1,0 +1,81 @@
+name: Fieldwork HTTPCore delegated close settlement
+
+on:
+  pull_request:
+    paths:
+      - '.fieldwork/test_httpcore_delegated_close_settlement.py'
+      - '.github/workflows/fieldwork-httpcore-delegated-close-settlement.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  characterize:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - '3.9'
+          - '3.13'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fieldwork/227-httpcore-delegated-close-settlement
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install declared test environment with exact transport dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            httpcore==1.0.9 \
+            anyio==4.12.1
+
+      - name: Record exact revision and dependency identity
+        run: |
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/fieldwork/227-httpcore-delegated-close-settlement)"
+          python --version
+          python - <<'PY'
+          import anyio
+          import httpcore
+          import httpx
+          import pytest
+          import trio
+
+          print(f"httpx={httpx.__version__}")
+          print(f"httpcore={httpcore.__version__}")
+          print(f"pytest={pytest.__version__}")
+          print(f"trio={trio.__version__}")
+          print(f"anyio={getattr(anyio, '__version__', 'package-metadata')}")
+          PY
+
+      - name: Stage target characterization
+        run: |
+          cp .fieldwork/test_httpcore_delegated_close_settlement.py tests/models/test_httpcore_delegated_close_settlement.py
+          git diff --check
+
+      - name: Run delegated close characterization
+        run: |
+          pytest -q -rxX tests/models/test_httpcore_delegated_close_settlement.py
+
+      - name: Run adjacent HTTPX response controls
+        run: |
+          pytest -q tests/models/test_responses.py -k 'aclose or close or streaming_response'
+
+      - name: Static checks
+        run: |
+          ruff check tests/models/test_httpcore_delegated_close_settlement.py
+          mypy httpx
