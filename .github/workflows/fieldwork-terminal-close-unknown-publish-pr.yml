@@ -30,7 +30,7 @@ jobs:
 
       - name: Verify exact publisher generation
         run: |
-          test "$(git rev-parse HEAD^)" = 3624387f17a05a770cc46ea82e96026fbeab74c8
+          test "$(git rev-parse HEAD^)" = 7784400878eaadfe2049b69e6564e353f2a1682b
           test "$(git hash-object httpx/_models.py)" = 2cc86321a4bc0915bd5e3886b3a69d551bbfc8d0
           test "$(git hash-object .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml)" = b8bfec62cd18f9cf11838bd5ae9d3d6c90da9b14
           test -f .github/workflows/fieldwork-terminal-close-unknown-repair.yml
@@ -121,12 +121,50 @@ jobs:
           python-version: '3.13'
           cache: pip
 
-      - name: Python 3.13 full exact-head validation
+      - name: Python 3.13 baseline and candidate full-suite discriminator
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          pytest -q
+
+          base_dir="$RUNNER_TEMP/httpx-base"
+          git worktree add --detach "$base_dir" b5addb64f0161ff6bfe94c124ef76f6a1fba5254
+
+          run_suite() {
+            label="$1"
+            directory="$2"
+            SUITE_FAILURES=0
+            for attempt in 1 2 3; do
+              echo "::group::${label} full suite attempt ${attempt}"
+              if (cd "$directory" && pytest -q); then
+                :
+              else
+                SUITE_FAILURES=$((SUITE_FAILURES + 1))
+              fi
+              echo "::endgroup::"
+            done
+          }
+
+          run_suite base "$base_dir"
+          base_failures="$SUITE_FAILURES"
+          run_suite candidate "$GITHUB_WORKSPACE"
+          candidate_failures="$SUITE_FAILURES"
+
+          echo "baseline full-suite failures: $base_failures / 3"
+          echo "candidate full-suite failures: $candidate_failures / 3"
+
+          if [ "$base_failures" -ne 0 ]; then
+            echo "The pinned base is unstable under this exact harness; publication remains blocked."
+            exit 1
+          fi
+          if [ "$candidate_failures" -ne 0 ]; then
+            echo "The materialized candidate regresses the exact full suite; repair source before publication."
+            exit 1
+          fi
+
+      - name: Python 3.13 static exact-head validation
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           ruff check \
             httpx/_models.py \
             httpx/_client.py \
