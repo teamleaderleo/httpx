@@ -3,7 +3,7 @@ name: Fieldwork async response close settlement
 on:
   pull_request:
     paths:
-      - '.fieldwork/async-response-close-settlement.patch'
+      - '.fieldwork/apply_async_response_close_settlement.py'
       - '.fieldwork/test_async_response_close_settlement.py'
       - '.fieldwork/test_async_response_close_control_flow.py'
       - '.fieldwork/test_async_response_close_pickle.py'
@@ -68,8 +68,8 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}" || \
             test "$(git branch --show-current)" = 'fieldwork/171-async-response-close-settlement'
-          git apply --check .fieldwork/async-response-close-settlement.patch
-          git apply .fieldwork/async-response-close-settlement.patch
+          python -m py_compile .fieldwork/apply_async_response_close_settlement.py
+          python .fieldwork/apply_async_response_close_settlement.py
           cp .fieldwork/test_async_response_close_settlement.py tests/models/test_async_response_close_settlement.py
           cp .fieldwork/test_async_response_close_control_flow.py tests/models/test_async_response_close_control_flow.py
           cp .fieldwork/test_async_response_close_pickle.py tests/models/test_async_response_close_pickle.py
