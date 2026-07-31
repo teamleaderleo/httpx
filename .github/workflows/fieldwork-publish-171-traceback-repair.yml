@@ -26,8 +26,8 @@ jobs:
       - name: Check out exact clean source head
         run: |
           git fetch origin fieldwork/171-terminal-close-source
-          git checkout --detach dc8101ef80dfde2aefb304b5e36f1c09e645b0da
-          test "$(git rev-parse HEAD)" = dc8101ef80dfde2aefb304b5e36f1c09e645b0da
+          git checkout --detach 60c6cc570fa7b4a3f305fa997a94ab1c7664aeff
+          test "$(git rev-parse HEAD)" = 60c6cc570fa7b4a3f305fa997a94ab1c7664aeff
           test "$(git diff --name-only b5addb64f0161ff6bfe94c124ef76f6a1fba5254...HEAD | sort)" = "$(printf '%s\n' \
             httpx/_client.py \
             httpx/_models.py \
