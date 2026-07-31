@@ -1,4 +1,4 @@
-name: Fieldwork publish terminal close source
+name: HTTPX terminal close exact-head execution
 
 on:
   pull_request:
@@ -8,132 +8,65 @@ on:
       - '.github/workflows/fieldwork-terminal-close-unknown-publish-pr.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: fieldwork-terminal-close-unknown-publish-pr
-  cancel-in-progress: false
+  group: httpx-terminal-close-exact-head
+  cancel-in-progress: true
 
 jobs:
-  publish:
+  test:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'fieldwork/171-terminal-close-unknown'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.13']
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check out exact source-only candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: fieldwork/171-terminal-close-unknown
-          fetch-depth: 0
-          persist-credentials: true
+          ref: 29a34ffbad971cfc347bbd76b0cf57f2dbb336b8
+          persist-credentials: false
 
-      - name: Verify exact publisher generation
+      - name: Verify exact source fence
         run: |
-          test "$(git rev-parse HEAD^)" = 43047aaa1ae10d4fc4cf55b14230d53eca90c5cb
-          test "$(git hash-object httpx/_models.py)" = 2cc86321a4bc0915bd5e3886b3a69d551bbfc8d0
-          test "$(git hash-object .github/workflows/fieldwork-terminal-close-unknown-finalizer.yml)" = b8bfec62cd18f9cf11838bd5ae9d3d6c90da9b14
-          test -f .github/workflows/fieldwork-terminal-close-unknown-repair.yml
-          ! git ls-remote --exit-code --heads origin \
-            refs/heads/fieldwork/171-terminal-close-source
-
-      - name: Reuse reviewed materialization block
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import subprocess
-
-          workflow = Path(
-              '.github/workflows/fieldwork-terminal-close-unknown-repair.yml'
-          ).read_text(encoding='utf-8')
-          start = (
-              '      - name: Materialize repaired source and regression tests\n'
-              '        run: |\n'
-          )
-          end = '\n      - name: Create source-only exact head\n'
-          if workflow.count(start) != 1 or workflow.count(end) != 1:
-              raise SystemExit('reviewed materialization block moved')
-          block = workflow.split(start, 1)[1].split(end, 1)[0]
-          script_lines = []
-          for line in block.splitlines():
-              if line.startswith('          '):
-                  script_lines.append(line[10:])
-              elif line:
-                  raise SystemExit(f'unexpected block indentation: {line!r}')
-              else:
-                  script_lines.append('')
-          script = '\n'.join(script_lines) + '\n'
-          Path('/tmp/materialize-terminal-close.sh').write_text(
-              script, encoding='utf-8'
-          )
-          subprocess.run(
-              ['bash', '/tmp/materialize-terminal-close.sh'], check=True
-          )
-          PY
-
-          git diff --check
+          test "$(git rev-parse HEAD)" = \
+            29a34ffbad971cfc347bbd76b0cf57f2dbb336b8
+          test -f tests/models/test_async_response_close_terminal_unknown.py
+          test -f tests/models/test_async_response_close_terminal_cancellation.py
+          test -z "$(git status --porcelain)"
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.9'
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Python 3.9 focused exact-tree validation
+      - name: Install repository dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+
+      - name: Run focused terminal-close controls
+        run: |
           pytest -q \
             tests/models/test_async_response_close_terminal_unknown.py \
-            tests/models/test_responses.py \
-            -k 'terminal_unknown or aclose or cannot_aread_after_response_closed or pickle'
+            tests/models/test_async_response_close_terminal_cancellation.py
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: '3.13'
-          cache: pip
+      - name: Run complete repository suite
+        run: pytest -q
 
-      - name: Python 3.13 static exact-tree validation
+      - name: Run static and complete-diff gates
+        if: matrix.python-version == '3.13'
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
           ruff check \
             httpx/_models.py \
             httpx/_client.py \
-            tests/models/test_async_response_close_terminal_unknown.py
+            tests/models/test_async_response_close_terminal_unknown.py \
+            tests/models/test_async_response_close_terminal_cancellation.py
           mypy httpx
           git diff --check
-
-      - name: Publish clean product-only branch
-        run: |
-          source_dir="$GITHUB_WORKSPACE"
-          clean_dir="$RUNNER_TEMP/httpx-terminal-close-source"
-
-          git worktree add --detach "$clean_dir" \
-            b5addb64f0161ff6bfe94c124ef76f6a1fba5254
-
-          cp "$source_dir/httpx/_models.py" "$clean_dir/httpx/_models.py"
-          cp "$source_dir/httpx/_client.py" "$clean_dir/httpx/_client.py"
-          cp \
-            "$source_dir/tests/models/test_async_response_close_terminal_unknown.py" \
-            "$clean_dir/tests/models/test_async_response_close_terminal_unknown.py"
-
-          cd "$clean_dir"
-          git config user.name fieldwork-ci
-          git config user.email fieldwork-ci@users.noreply.github.com
-          git add \
-            httpx/_models.py \
-            httpx/_client.py \
-            tests/models/test_async_response_close_terminal_unknown.py
-
-          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' \
-            httpx/_client.py \
-            httpx/_models.py \
-            tests/models/test_async_response_close_terminal_unknown.py)"
-          git diff --cached --check
-          git commit -m 'fix: make async response close failure terminal'
-          clean_head="$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD^)" = \
-            b5addb64f0161ff6bfe94c124ef76f6a1fba5254
-          git push origin \
-            HEAD:refs/heads/fieldwork/171-terminal-close-source
-          echo "Published clean source head: $clean_head"
+          test -z "$(git status --porcelain --untracked-files=no)"
