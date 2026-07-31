@@ -1,15 +1,16 @@
 name: Fieldwork execute 171 traceback repair
 
 on:
-  push:
+  pull_request:
     branches:
-      - publish/171-traceback-retention-repair
+      - fieldwork/171-terminal-close-source
     paths:
+      - .fieldwork/publish_171_traceback_repair.py
       - .github/workflows/fieldwork-publish-171-traceback-repair.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   focused:
@@ -20,7 +21,7 @@ jobs:
       matrix:
         python-version: ["3.9", "3.13"]
     steps:
-      - name: Check out publisher
+      - name: Check out evidence carrier
         uses: actions/checkout@v4
       - name: Check out exact clean source head
         run: |
@@ -45,29 +46,3 @@ jobs:
         run: scripts/check
       - name: Verify clean execution tree
         run: git diff --check
-
-  receipt:
-    needs: focused
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out publisher branch
-        uses: actions/checkout@v4
-        with:
-          ref: publish/171-traceback-retention-repair
-      - name: Retain exact execution receipt
-        run: |
-          mkdir -p .fieldwork/receipts
-          cat > .fieldwork/receipts/171-traceback-repair.txt <<EOF
-          source_head=27c77e365bd9b9ef930298937db434902c863d24
-          base_head=b5addb64f0161ff6bfe94c124ef76f6a1fba5254
-          workflow_run=${{ github.run_id }}
-          python_versions=3.9,3.13
-          focused_test=tests/models/test_async_response_close_terminal_unknown.py
-          python_3_13_check=scripts/check
-          result=success
-          EOF
-          git config user.name "Fieldwork Evidence"
-          git config user.email "fieldwork@example.invalid"
-          git add .fieldwork/receipts/171-traceback-repair.txt
-          git commit -m "record async-close repair execution receipt"
-          git push origin HEAD:publish/171-traceback-retention-repair
