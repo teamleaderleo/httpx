@@ -26,11 +26,12 @@ jobs:
       - name: Check out exact clean source head
         run: |
           git fetch origin fieldwork/171-terminal-close-source
-          git checkout --detach 60c6cc570fa7b4a3f305fa997a94ab1c7664aeff
-          test "$(git rev-parse HEAD)" = 60c6cc570fa7b4a3f305fa997a94ab1c7664aeff
+          git checkout --detach 29a34ffbad971cfc347bbd76b0cf57f2dbb336b8
+          test "$(git rev-parse HEAD)" = 29a34ffbad971cfc347bbd76b0cf57f2dbb336b8
           test "$(git diff --name-only b5addb64f0161ff6bfe94c124ef76f6a1fba5254...HEAD | sort)" = "$(printf '%s\n' \
             httpx/_client.py \
             httpx/_models.py \
+            tests/models/test_async_response_close_terminal_cancellation.py \
             tests/models/test_async_response_close_terminal_unknown.py | sort)"
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -39,8 +40,11 @@ jobs:
           allow-prereleases: true
       - name: Install dependencies
         run: scripts/install
-      - name: Run focused terminal-close regression
-        run: pytest -q tests/models/test_async_response_close_terminal_unknown.py
+      - name: Run focused terminal-close regressions
+        run: >-
+          pytest -q
+          tests/models/test_async_response_close_terminal_unknown.py
+          tests/models/test_async_response_close_terminal_cancellation.py
       - name: Run project checks
         if: matrix.python-version == '3.13'
         run: scripts/check
