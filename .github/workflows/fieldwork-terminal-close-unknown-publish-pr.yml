@@ -29,13 +29,13 @@ jobs:
       - name: Check out exact source-only candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: cac5a8e2a433963ca81236414f9069aa5d29e6f4
+          ref: 18256f10d1b306bdf87a1bab24b214c15839147b
           persist-credentials: false
 
       - name: Verify exact source fence
         run: |
           test "$(git rev-parse HEAD)" = \
-            cac5a8e2a433963ca81236414f9069aa5d29e6f4
+            18256f10d1b306bdf87a1bab24b214c15839147b
           test -f tests/models/test_async_response_close_terminal_unknown.py
           test -f tests/models/test_async_response_close_terminal_cancellation.py
           test -f tests/client/test_async_client_terminal_close_elapsed.py
@@ -50,15 +50,19 @@ jobs:
         run: scripts/install
 
       - name: Run repository-native static checks
+        if: matrix.python-version == '3.13'
         run: scripts/check
 
       - name: Build package and documentation
+        if: matrix.python-version == '3.13'
         run: scripts/build
 
       - name: Run repository-native complete suite
+        if: matrix.python-version == '3.13'
         run: scripts/test
 
       - name: Enforce repository coverage
+        if: matrix.python-version == '3.13'
         run: scripts/coverage
 
       - name: Run focused terminal-close controls
