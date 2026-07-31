@@ -1,0 +1,48 @@
+name: Fieldwork publish 171 traceback repair
+
+on:
+  push:
+    branches:
+      - publish/171-traceback-retention-repair
+    paths:
+      - .fieldwork/publish_171_traceback_repair.py
+      - .github/workflows/fieldwork-publish-171-traceback-repair.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out publisher
+        uses: actions/checkout@v4
+      - name: Retain deterministic transformer
+        run: cp .fieldwork/publish_171_traceback_repair.py /tmp/publish_171.py
+      - name: Check out exact clean source head
+        run: |
+          git fetch origin fieldwork/171-terminal-close-source
+          git checkout -B fieldwork/171-terminal-close-source origin/fieldwork/171-terminal-close-source
+          test "$(git rev-parse HEAD)" = b1e69f6d073a314cb57efb8af41120e0ad45a98f
+      - name: Apply bounded repair
+        run: python /tmp/publish_171.py
+      - name: Verify source fence
+        run: |
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            httpx/_models.py \
+            tests/models/test_async_response_close_terminal_unknown.py | sort)"
+          python -m py_compile \
+            httpx/_models.py \
+            tests/models/test_async_response_close_terminal_unknown.py
+          git diff --check
+      - name: Publish clean source commit
+        run: |
+          git config user.name "Fieldwork Publisher"
+          git config user.email "fieldwork@example.invalid"
+          git add \
+            httpx/_models.py \
+            tests/models/test_async_response_close_terminal_unknown.py
+          git commit -m "fix async close terminal failure retention"
+          git push origin HEAD:fieldwork/171-terminal-close-source
