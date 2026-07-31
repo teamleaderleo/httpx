@@ -13,7 +13,7 @@ class CancellableCloseStream(httpx.AsyncByteStream):
         self.cancelled_error: BaseException | None = None
 
     async def __aiter__(self):
-        if False:
+        if False:  # pragma: no cover
             yield b""
 
     async def aclose(self) -> None:
