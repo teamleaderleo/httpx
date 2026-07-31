@@ -1,7 +1,15 @@
+import gc
+import weakref
+
 import anyio
 import pytest
 
 import httpx
+
+
+OBSERVER_CAUSE_MESSAGE = (
+    "The original stream close failure was delivered to the initiating caller."
+)
 
 
 def traceback_depth(exc: BaseException) -> int:
@@ -11,6 +19,22 @@ def traceback_depth(exc: BaseException) -> int:
         depth += 1
         traceback = traceback.tb_next
     return depth
+
+
+def assert_neutral_observer_failure(
+    exc: httpx.CloseError, request: httpx.Request | None
+) -> httpx.CloseError:
+    if request is None:
+        with pytest.raises(RuntimeError, match="request property has not been set"):
+            exc.request
+    else:
+        assert exc.request is request
+
+    cause = exc.__cause__
+    assert isinstance(cause, httpx.CloseError)
+    assert cause.args == (OBSERVER_CAUSE_MESSAGE,)
+    assert cause.__traceback__ is None
+    return cause
 
 
 class ControlFlowAbort(BaseException):
@@ -53,6 +77,26 @@ class SuccessfulBlockingStream(httpx.AsyncByteStream):
         await self.release.wait()
 
 
+class FrameMarker:
+    pass
+
+
+class FrameLocalFailureStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.marker_ref: weakref.ReferenceType[FrameMarker] | None = None
+        self.close_calls = 0
+
+    async def __aiter__(self):
+        if False:
+            yield b""
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        marker = FrameMarker()
+        self.marker_ref = weakref.ref(marker)
+        raise RuntimeError("frame-local close failure")
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "error",
@@ -91,10 +135,11 @@ async def test_waiters_observe_distinct_neutral_terminal_failures(
     assert len(waiter_errors) == 2
     assert waiter_errors[0] is not waiter_errors[1]
     assert waiter_errors[0].args == waiter_errors[1].args
-    assert waiter_errors[0].request is request
-    assert waiter_errors[1].request is request
-    assert waiter_errors[0].__cause__ is error
-    assert waiter_errors[1].__cause__ is error
+    waiter_causes = [
+        assert_neutral_observer_failure(exc, request) for exc in waiter_errors
+    ]
+    assert waiter_causes[0] is not waiter_causes[1]
+    assert error not in waiter_causes
     assert waiter_errors[0].__traceback__ is not waiter_errors[1].__traceback__
     assert stream.close_calls == 1
     assert stream.cleanup_commits == 1
@@ -105,15 +150,16 @@ async def test_waiters_observe_distinct_neutral_terminal_failures(
         await response.aclose()
     assert later.value is not waiter_errors[0]
     assert later.value is not waiter_errors[1]
-    assert later.value.request is request
-    assert later.value.__cause__ is error
+    later_cause = assert_neutral_observer_failure(later.value, request)
+    assert later_cause not in waiter_causes
     later_depth = traceback_depth(later.value)
 
     with pytest.raises(httpx.CloseError) as repeated:
         await response.aclose()
     assert repeated.value is not later.value
-    assert repeated.value.request is request
-    assert repeated.value.__cause__ is error
+    repeated_cause = assert_neutral_observer_failure(repeated.value, request)
+    assert repeated_cause is not later_cause
+    assert repeated_cause not in waiter_causes
     assert traceback_depth(repeated.value) == later_depth
     assert [traceback_depth(exc) for exc in waiter_errors] == waiter_depths
     assert stream.close_calls == 1
@@ -167,6 +213,53 @@ async def test_later_close_does_not_repeat_committed_cleanup() -> None:
 
     with pytest.raises(httpx.CloseError) as later:
         await response.aclose()
-    assert later.value.__cause__ is error
+    assert_neutral_observer_failure(later.value, None)
     assert stream.close_calls == 1
     assert stream.cleanup_commits == 1
+
+
+@pytest.mark.anyio
+async def test_terminal_response_does_not_retain_owner_traceback_frame() -> None:
+    stream = FrameLocalFailureStream()
+    response = httpx.Response(200, stream=stream)
+
+    async def run_owner() -> None:
+        try:
+            await response.aclose()
+        except RuntimeError as exc:
+            assert str(exc) == "frame-local close failure"
+        else:  # pragma: no cover
+            raise AssertionError("owner failure did not escape")
+
+    await run_owner()
+    marker_ref = stream.marker_ref
+    assert marker_ref is not None
+    gc.collect()
+    assert marker_ref() is None
+
+    with pytest.raises(httpx.CloseError) as later:
+        await response.aclose()
+    assert_neutral_observer_failure(later.value, None)
+    assert stream.close_calls == 1
+
+
+@pytest.mark.anyio
+async def test_terminal_observer_failure_is_valid_without_request() -> None:
+    error = RuntimeError("requestless close failed")
+    stream = CommitThenRaiseStream(error)
+    response = httpx.Response(200, stream=stream)
+
+    async def release() -> None:
+        await stream.started.wait()
+        stream.release.set()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(release)
+        with pytest.raises(RuntimeError) as owner:
+            await response.aclose()
+    assert owner.value is error
+
+    with pytest.raises(httpx.CloseError) as later:
+        await response.aclose()
+    assert_neutral_observer_failure(later.value, None)
+    assert stream.close_calls == 1

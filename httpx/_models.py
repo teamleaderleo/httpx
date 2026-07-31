@@ -59,7 +59,18 @@ SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
 class _AsyncCloseState:
     def __init__(self) -> None:
         self.event = anyio.Event()
-        self.failure: BaseException | None = None
+        self.failed = False
+
+
+def _new_async_close_error(request: Request | None) -> CloseError:
+    failure = CloseError(
+        "Response close outcome is unknown after stream cleanup failed.",
+        request=request,
+    )
+    failure.__cause__ = CloseError(
+        "The original stream close failure was delivered to the initiating caller."
+    )
+    return failure
 
 
 def _is_known_encoding(encoding: str) -> bool:
@@ -553,7 +564,7 @@ class Response:
         self.is_stream_consumed = False
         self._async_close_started = False
         self._async_close_state: _AsyncCloseState | None = None
-        self._async_close_failure: BaseException | None = None
+        self._async_close_failed = False
 
         self.default_encoding = default_encoding
 
@@ -882,7 +893,7 @@ class Response:
                 "is_closed",
                 "_decoder",
                 "_async_close_state",
-                "_async_close_failure",
+                "_async_close_failed",
             ]
         }
 
@@ -892,7 +903,7 @@ class Response:
         self.is_closed = True
         self._async_close_started = True
         self._async_close_state = None
-        self._async_close_failure = None
+        self._async_close_failed = False
         self.extensions = {}
         self.stream = UnattachedStream()
 
@@ -1095,13 +1106,8 @@ class Response:
 
         if self.is_closed:
             return
-        if self._async_close_failure is not None:
-            failure = CloseError(
-                "Response close outcome is unknown after stream cleanup failed.",
-                request=self._request,
-            )
-            failure.__cause__ = self._async_close_failure
-            raise failure
+        if self._async_close_failed:
+            raise _new_async_close_error(self._request)
 
         state = self._async_close_state
         if state is None:
@@ -1111,9 +1117,9 @@ class Response:
             try:
                 with request_context(request=self._request):
                     await self.stream.aclose()
-            except BaseException as exc:
-                self._async_close_failure = exc
-                state.failure = exc
+            except BaseException:
+                self._async_close_failed = True
+                state.failed = True
                 self._async_close_state = None
                 state.event.set()
                 raise
@@ -1124,13 +1130,8 @@ class Response:
                 return
 
         await state.event.wait()
-        if state.failure is not None:
-            failure = CloseError(
-                "Response close outcome is unknown after stream cleanup failed.",
-                request=self._request,
-            )
-            failure.__cause__ = state.failure
-            raise failure
+        if state.failed:
+            raise _new_async_close_error(self._request)
 
 
 class Cookies(typing.MutableMapping[str, str]):
