@@ -49,6 +49,12 @@ jobs:
       - name: Install repository dependencies
         run: scripts/install
 
+      - name: Print exact Ruff import repair
+        if: matrix.python-version == '3.13'
+        run: |
+          ruff check --fix --diff \
+            tests/models/test_async_response_close_terminal_unknown.py || true
+
       - name: Run repository-native static checks
         run: scripts/check
 
