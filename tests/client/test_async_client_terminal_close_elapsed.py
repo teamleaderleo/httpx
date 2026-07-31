@@ -11,7 +11,7 @@ class FailingCloseStream(httpx.AsyncByteStream):
         self.error = RuntimeError("stream cleanup failed")
 
     async def __aiter__(self):
-        yield b"body"
+        yield b"body"  # pragma: no cover
 
     async def aclose(self) -> None:
         self.close_calls += 1
