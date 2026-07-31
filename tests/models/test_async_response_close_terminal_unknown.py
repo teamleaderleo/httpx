@@ -51,7 +51,7 @@ class CommitThenRaiseStream(httpx.AsyncByteStream):
         self.cleanup_commits = 0
 
     async def __aiter__(self):
-        if False:
+        if False:  # pragma: no cover
             yield b""
 
     async def aclose(self) -> None:
@@ -69,7 +69,7 @@ class SuccessfulBlockingStream(httpx.AsyncByteStream):
         self.close_calls = 0
 
     async def __aiter__(self):
-        if False:
+        if False:  # pragma: no cover
             yield b""
 
     async def aclose(self) -> None:
@@ -88,7 +88,7 @@ class FrameLocalFailureStream(httpx.AsyncByteStream):
         self.close_calls = 0
 
     async def __aiter__(self):
-        if False:
+        if False:  # pragma: no cover
             yield b""
 
     async def aclose(self) -> None:
