@@ -27,7 +27,9 @@ class CancellableCloseStream(httpx.AsyncByteStream):
 
 
 @pytest.mark.anyio
-async def test_cancelled_owner_preserves_backend_error_and_terminalizes_observers() -> None:
+async def test_cancelled_owner_preserves_backend_error_and_terminalizes_observers() -> (
+    None
+):
     request = httpx.Request("GET", "https://example.org")
     stream = CancellableCloseStream()
     response = httpx.Response(200, request=request, stream=stream)
