@@ -4,9 +4,8 @@ import gc
 import weakref
 
 import anyio
-import pytest
-
 import httpx
+import pytest
 
 
 OBSERVER_CAUSE_MESSAGE = (
