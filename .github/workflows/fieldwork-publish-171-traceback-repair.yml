@@ -1,11 +1,10 @@
-name: Fieldwork publish 171 traceback repair
+name: Fieldwork execute 171 traceback repair
 
 on:
   push:
     branches:
       - publish/171-traceback-retention-repair
     paths:
-      - .fieldwork/publish_171_traceback_repair.py
       - .github/workflows/fieldwork-publish-171-traceback-repair.yml
   workflow_dispatch:
 
@@ -13,36 +12,62 @@ permissions:
   contents: write
 
 jobs:
-  publish:
+  focused:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
     steps:
       - name: Check out publisher
         uses: actions/checkout@v4
-      - name: Retain deterministic transformer
-        run: cp .fieldwork/publish_171_traceback_repair.py /tmp/publish_171.py
       - name: Check out exact clean source head
         run: |
           git fetch origin fieldwork/171-terminal-close-source
-          git checkout -B fieldwork/171-terminal-close-source origin/fieldwork/171-terminal-close-source
-          test "$(git rev-parse HEAD)" = b1e69f6d073a314cb57efb8af41120e0ad45a98f
-      - name: Apply bounded repair
-        run: python /tmp/publish_171.py
-      - name: Verify source fence
-        run: |
-          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+          git checkout --detach 27c77e365bd9b9ef930298937db434902c863d24
+          test "$(git rev-parse HEAD)" = 27c77e365bd9b9ef930298937db434902c863d24
+          test "$(git diff --name-only b5addb64f0161ff6bfe94c124ef76f6a1fba5254...HEAD | sort)" = "$(printf '%s\n' \
+            httpx/_client.py \
             httpx/_models.py \
             tests/models/test_async_response_close_terminal_unknown.py | sort)"
-          python -m py_compile \
-            httpx/_models.py \
-            tests/models/test_async_response_close_terminal_unknown.py
-          git diff --check
-      - name: Publish clean source commit
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "${{ matrix.python-version }}"
+          allow-prereleases: true
+      - name: Install dependencies
+        run: scripts/install
+      - name: Run focused terminal-close regression
+        run: pytest -q tests/models/test_async_response_close_terminal_unknown.py
+      - name: Run project checks
+        if: matrix.python-version == '3.13'
+        run: scripts/check
+      - name: Verify clean execution tree
+        run: git diff --check
+
+  receipt:
+    needs: focused
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out publisher branch
+        uses: actions/checkout@v4
+        with:
+          ref: publish/171-traceback-retention-repair
+      - name: Retain exact execution receipt
         run: |
-          git config user.name "Fieldwork Publisher"
+          mkdir -p .fieldwork/receipts
+          cat > .fieldwork/receipts/171-traceback-repair.txt <<EOF
+          source_head=27c77e365bd9b9ef930298937db434902c863d24
+          base_head=b5addb64f0161ff6bfe94c124ef76f6a1fba5254
+          workflow_run=${{ github.run_id }}
+          python_versions=3.9,3.13
+          focused_test=tests/models/test_async_response_close_terminal_unknown.py
+          python_3_13_check=scripts/check
+          result=success
+          EOF
+          git config user.name "Fieldwork Evidence"
           git config user.email "fieldwork@example.invalid"
-          git add \
-            httpx/_models.py \
-            tests/models/test_async_response_close_terminal_unknown.py
-          git commit -m "fix async close terminal failure retention"
-          git push origin HEAD:fieldwork/171-terminal-close-source
+          git add .fieldwork/receipts/171-traceback-repair.txt
+          git commit -m "record async-close repair execution receipt"
+          git push origin HEAD:publish/171-traceback-retention-repair
