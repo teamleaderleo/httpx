@@ -47,9 +47,19 @@ jobs:
           cache: pip
 
       - name: Install repository dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+        run: scripts/install
+
+      - name: Run repository-native static checks
+        run: scripts/check
+
+      - name: Build package and documentation
+        run: scripts/build
+
+      - name: Run repository-native complete suite
+        run: scripts/test
+
+      - name: Enforce repository coverage
+        run: scripts/coverage
 
       - name: Run focused terminal-close controls
         run: |
@@ -58,18 +68,7 @@ jobs:
             tests/models/test_async_response_close_terminal_cancellation.py \
             tests/client/test_async_client_terminal_close_elapsed.py
 
-      - name: Run complete repository suite
-        run: pytest -q
-
-      - name: Run static and complete-diff gates
-        if: matrix.python-version == '3.13'
+      - name: Verify complete-diff hygiene
         run: |
-          ruff check \
-            httpx/_models.py \
-            httpx/_client.py \
-            tests/models/test_async_response_close_terminal_unknown.py \
-            tests/models/test_async_response_close_terminal_cancellation.py \
-            tests/client/test_async_client_terminal_close_elapsed.py
-          mypy httpx
           git diff --check
           test -z "$(git status --porcelain --untracked-files=no)"
