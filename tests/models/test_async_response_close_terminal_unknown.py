@@ -8,7 +8,6 @@ import pytest
 
 import httpx
 
-
 OBSERVER_CAUSE_MESSAGE = (
     "The original stream close failure was delivered to the initiating caller."
 )
