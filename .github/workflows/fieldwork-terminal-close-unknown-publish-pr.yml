@@ -29,13 +29,13 @@ jobs:
       - name: Check out exact source-only candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 206b8f50f2cb773d8854646b35f8938bf528dd83
+          ref: e6b6764d87e4a61e392d28dd3baccf6e602374e3
           persist-credentials: false
 
       - name: Verify exact source fence
         run: |
           test "$(git rev-parse HEAD)" = \
-            206b8f50f2cb773d8854646b35f8938bf528dd83
+            e6b6764d87e4a61e392d28dd3baccf6e602374e3
           test -f tests/models/test_async_response_close_terminal_unknown.py
           test -f tests/models/test_async_response_close_terminal_cancellation.py
           test -f tests/client/test_async_client_terminal_close_elapsed.py
