@@ -44,7 +44,7 @@ async def test_elapsed_is_not_published_when_stream_cleanup_fails() -> None:
             RuntimeError,
             match="may only be accessed after the response has been read or closed",
         ):
-            response.elapsed
+            _ = response.elapsed
 
         with pytest.raises(httpx.CloseError) as observer:
             await response.aclose()
@@ -55,4 +55,4 @@ async def test_elapsed_is_not_published_when_stream_cleanup_fails() -> None:
             RuntimeError,
             match="may only be accessed after the response has been read or closed",
         ):
-            response.elapsed
+            _ = response.elapsed
