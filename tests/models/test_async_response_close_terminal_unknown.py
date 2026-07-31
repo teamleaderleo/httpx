@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import gc
 import weakref
 
 import anyio
-import pytest
-
 import httpx
+import pytest
 
 
 OBSERVER_CAUSE_MESSAGE = (
@@ -26,7 +27,7 @@ def assert_neutral_observer_failure(
 ) -> httpx.CloseError:
     if request is None:
         with pytest.raises(RuntimeError, match="request property has not been set"):
-            exc.request
+            assert exc.request is None
     else:
         assert exc.request is request
 
