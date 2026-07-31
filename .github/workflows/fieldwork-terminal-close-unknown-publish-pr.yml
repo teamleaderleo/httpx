@@ -29,13 +29,13 @@ jobs:
       - name: Check out exact source-only candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 21a448468d0566bdcce15bedcc5703520f3d2a1b
+          ref: cac5a8e2a433963ca81236414f9069aa5d29e6f4
           persist-credentials: false
 
       - name: Verify exact source fence
         run: |
           test "$(git rev-parse HEAD)" = \
-            21a448468d0566bdcce15bedcc5703520f3d2a1b
+            cac5a8e2a433963ca81236414f9069aa5d29e6f4
           test -f tests/models/test_async_response_close_terminal_unknown.py
           test -f tests/models/test_async_response_close_terminal_cancellation.py
           test -f tests/client/test_async_client_terminal_close_elapsed.py
@@ -48,12 +48,6 @@ jobs:
 
       - name: Install repository dependencies
         run: scripts/install
-
-      - name: Print exact Ruff import repair
-        if: matrix.python-version == '3.13'
-        run: |
-          ruff check --fix --diff \
-            tests/models/test_async_response_close_terminal_unknown.py || true
 
       - name: Run repository-native static checks
         run: scripts/check
