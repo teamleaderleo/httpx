@@ -1,0 +1,139 @@
+name: Unit 12 repair v2
+
+on:
+  push:
+    branches:
+      - fieldwork/171-terminal-close-source
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unit12-repair-v2
+  cancel-in-progress: false
+
+jobs:
+  focused:
+    name: Focused tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: teamleaderleo/fieldwork
+          ref: upstream/12-httpx-terminal-async-close
+          path: fieldwork
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+      - name: Apply retained repair
+        working-directory: source
+        run: |
+          git apply --check ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+          git apply ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+      - name: Install dependencies
+        working-directory: source
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Run focused async-close tests
+        working-directory: source
+        run: >-
+          python -m pytest -q
+          tests/models/test_async_response_close_reentry.py
+          tests/models/test_async_response_close_terminal_unknown.py
+          tests/models/test_async_response_close_terminal_cancellation.py
+          tests/client/test_async_client_terminal_close_elapsed.py
+
+  full:
+    name: Full repository gates (Python 3.13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: teamleaderleo/fieldwork
+          ref: upstream/12-httpx-terminal-async-close
+          path: fieldwork
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+      - name: Apply retained repair
+        working-directory: source
+        run: |
+          git apply --check ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+          git apply ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+      - name: Install dependencies
+        working-directory: source
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Static checks
+        working-directory: source
+        run: ./scripts/check
+      - name: Full suite with coverage
+        working-directory: source
+        run: |
+          coverage run -m pytest -q
+          coverage report --fail-under=100
+      - name: Package and docs
+        working-directory: source
+        run: |
+          python -m build
+          twine check dist/*
+          mkdocs build --strict
+      - name: Diff hygiene
+        working-directory: source
+        run: git diff --check
+
+  finalize:
+    name: Commit clean repaired source
+    needs: [focused, full]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fieldwork/171-terminal-close-source
+          path: source
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: teamleaderleo/fieldwork
+          ref: upstream/12-httpx-terminal-async-close
+          path: fieldwork
+      - name: Apply repair and remove temporary workflows
+        working-directory: source
+        shell: bash
+        run: |
+          git apply --check ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+          git apply ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+          git rm .github/workflows/unit12-apply-repair.yml .github/workflows/unit12-repair-v2.yml
+          git add -A
+          git diff --cached --check
+          expected=$(printf '%s\n' \
+            httpx/_client.py \
+            httpx/_models.py \
+            tests/client/test_async_client_terminal_close_elapsed.py \
+            tests/models/test_async_response_close_reentry.py \
+            tests/models/test_async_response_close_terminal_cancellation.py \
+            tests/models/test_async_response_close_terminal_unknown.py | sort)
+          actual=$(git diff --cached --name-only b5addb64f0161ff6bfe94c124ef76f6a1fba5254 | sort)
+          test "$actual" = "$expected"
+      - name: Commit repaired source
+        working-directory: source
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Fix reentrant async close and elapsed sampling"
+          git push origin HEAD:fieldwork/171-terminal-close-source
