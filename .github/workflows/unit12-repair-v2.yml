@@ -1,21 +1,25 @@
-name: Unit 12 repair v2
+name: Unit 12 repair executor
 
-# Triggered after the workflow existed on the branch.
 on:
-  push:
-    branches:
-      - fieldwork/171-terminal-close-source
+  pull_request:
+    branches: ["master"]
 
 permissions:
   contents: write
 
 concurrency:
-  group: unit12-repair-v2
+  group: unit12-repair-executor
   cancel-in-progress: false
+
+env:
+  SOURCE_REF: fieldwork/171-terminal-close-source
+  SOURCE_SHA: 18256f10d1b306bdf87a1bab24b214c15839147b
+  BASE_SHA: b5addb64f0161ff6bfe94c124ef76f6a1fba5254
+  PATCH_PATH: upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
 
 jobs:
   focused:
-    name: Focused tests (Python ${{ matrix.python-version }})
+    name: Focused repair tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -24,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.SOURCE_REF }}
           path: source
           fetch-depth: 0
       - uses: actions/checkout@v4
@@ -31,20 +36,32 @@ jobs:
           repository: teamleaderleo/fieldwork
           ref: upstream/12-httpx-terminal-async-close
           path: fieldwork
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
           cache: pip
           cache-dependency-path: source/requirements.txt
+      - name: Verify exact clean source
+        working-directory: source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git hash-object httpx/_models.py)" = 3ccb5290ceb95d96e24047bcec2897c52de16176
+          test "$(git hash-object httpx/_client.py)" = 79934d050cd77414fb6f9c1024f42f6029c924e0
       - name: Apply retained repair
         working-directory: source
         run: |
-          git apply --check ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
-          git apply ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+          git apply --check "../fieldwork/$PATCH_PATH"
+          git apply "../fieldwork/$PATCH_PATH"
+          test "$(git hash-object httpx/_models.py)" = 781977bec302ab67921fb9024cc14a9f97f756f4
+          test "$(git hash-object httpx/_client.py)" = 510b41959383dcf78bd311a236afc44dd92d010a
+          test "$(git hash-object tests/client/test_async_client_terminal_close_elapsed.py)" = c3a27b2f65f04c723a4fc330f25215dcc6565e1c
+          test "$(git hash-object tests/models/test_async_response_close_reentry.py)" = f6ede0c73350224c563cab85786463b7cbb07bcf
       - name: Install dependencies
         working-directory: source
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
-      - name: Run focused async-close tests
+      - name: Run focused asyncio and Trio controls
         working-directory: source
         run: >-
           python -m pytest -q
@@ -52,6 +69,9 @@ jobs:
           tests/models/test_async_response_close_terminal_unknown.py
           tests/models/test_async_response_close_terminal_cancellation.py
           tests/client/test_async_client_terminal_close_elapsed.py
+      - name: Diff hygiene
+        working-directory: source
+        run: git diff --check
 
   full:
     name: Full repository gates (Python 3.13)
@@ -59,6 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.SOURCE_REF }}
           path: source
           fetch-depth: 0
       - uses: actions/checkout@v4
@@ -66,45 +87,58 @@ jobs:
           repository: teamleaderleo/fieldwork
           ref: upstream/12-httpx-terminal-async-close
           path: fieldwork
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          allow-prereleases: true
           cache: pip
           cache-dependency-path: source/requirements.txt
-      - name: Apply retained repair
+      - name: Verify and apply exact repair
         working-directory: source
+        shell: bash
         run: |
-          git apply --check ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
-          git apply ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git apply --check "../fieldwork/$PATCH_PATH"
+          git apply "../fieldwork/$PATCH_PATH"
+          git diff --check
+      - name: Verify exact six-file fence
+        working-directory: source
+        shell: bash
+        run: |
+          expected=$(printf '%s\n' \
+            httpx/_client.py \
+            httpx/_models.py \
+            tests/client/test_async_client_terminal_close_elapsed.py \
+            tests/models/test_async_response_close_reentry.py \
+            tests/models/test_async_response_close_terminal_cancellation.py \
+            tests/models/test_async_response_close_terminal_unknown.py | sort)
+          actual=$(git diff --name-only "$BASE_SHA" | sort)
+          test "$actual" = "$expected"
       - name: Install dependencies
         working-directory: source
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
       - name: Static checks
         working-directory: source
         run: ./scripts/check
-      - name: Full suite with coverage
+      - name: Package and documentation build
         working-directory: source
-        run: |
-          coverage run -m pytest -q
-          coverage report --fail-under=100
-      - name: Package and docs
+        run: ./scripts/build
+      - name: Complete suite
         working-directory: source
-        run: |
-          python -m build
-          twine check dist/*
-          mkdocs build --strict
-      - name: Diff hygiene
+        run: ./scripts/test
+      - name: Enforce complete coverage
         working-directory: source
-        run: git diff --check
+        run: ./scripts/coverage
 
   finalize:
     name: Commit clean repaired source
     needs: [focused, full]
+    if: github.event.pull_request.head.ref == 'fieldwork/171-terminal-close-repair-carrier'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fieldwork/171-terminal-close-source
+          ref: ${{ env.SOURCE_REF }}
           path: source
           fetch-depth: 0
       - uses: actions/checkout@v4
@@ -112,13 +146,13 @@ jobs:
           repository: teamleaderleo/fieldwork
           ref: upstream/12-httpx-terminal-async-close
           path: fieldwork
-      - name: Apply repair and remove temporary workflows
+      - name: Apply exact repair to clean source
         working-directory: source
         shell: bash
         run: |
-          git apply --check ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
-          git apply ../fieldwork/upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
-          git rm .github/workflows/unit12-apply-repair.yml .github/workflows/unit12-repair-v2.yml
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git apply --check "../fieldwork/$PATCH_PATH"
+          git apply "../fieldwork/$PATCH_PATH"
           git add -A
           git diff --cached --check
           expected=$(printf '%s\n' \
@@ -128,13 +162,13 @@ jobs:
             tests/models/test_async_response_close_reentry.py \
             tests/models/test_async_response_close_terminal_cancellation.py \
             tests/models/test_async_response_close_terminal_unknown.py | sort)
-          actual=$(git diff --cached --name-only b5addb64f0161ff6bfe94c124ef76f6a1fba5254 | sort)
+          actual=$(git diff --cached --name-only "$BASE_SHA" | sort)
           test "$actual" = "$expected"
-      - name: Commit repaired source
+      - name: Commit and publish repaired source
         working-directory: source
         shell: bash
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "Fix reentrant async close and elapsed sampling"
-          git push origin HEAD:fieldwork/171-terminal-close-source
+          git push origin HEAD:"$SOURCE_REF"
