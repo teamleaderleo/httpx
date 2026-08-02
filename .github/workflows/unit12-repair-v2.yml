@@ -57,7 +57,7 @@ jobs:
           test "$(git hash-object httpx/_models.py)" = 0533a7324d0ed45ffb1087570551efcdaed02fa5
           test "$(git hash-object httpx/_client.py)" = 510b41959383dcf78bd311a236afc44dd92d010a
           test "$(git hash-object tests/client/test_async_client_terminal_close_elapsed.py)" = 67545aede0ba92364f70dc9f37c5c2e0a010c836
-          test "$(git hash-object tests/models/test_async_response_close_reentry.py)" = 4a13b86b8d644effbf200bf9d772b150f056ae0d
+          test "$(git hash-object tests/models/test_async_response_close_reentry.py)" = 0be56b2cb9a9a2e7fabc1a6bc107bbcca520fd67
       - name: Install dependencies
         working-directory: source
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
