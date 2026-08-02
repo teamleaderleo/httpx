@@ -177,8 +177,8 @@ class BoundAsyncStream(AsyncByteStream):
             yield chunk
 
     async def aclose(self) -> None:
-        await self._stream.aclose()
         elapsed = time.perf_counter() - self._start
+        await self._stream.aclose()
         self._response.elapsed = datetime.timedelta(seconds=elapsed)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import anyio
 import pytest
 
 import httpx
@@ -56,3 +57,61 @@ async def test_elapsed_is_not_published_when_stream_cleanup_fails() -> None:
             match="may only be accessed after the response has been read or closed",
         ):
             _ = response.elapsed
+
+
+class BlockingCloseStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.started = anyio.Event()
+        self.release = anyio.Event()
+
+    async def __aiter__(self):
+        if False:  # pragma: no cover
+            yield b""
+
+    async def aclose(self) -> None:
+        self.started.set()
+        await self.release.wait()
+
+
+class BlockingCloseTransport(httpx.AsyncBaseTransport):
+    def __init__(self, stream: BlockingCloseStream) -> None:
+        self.stream = stream
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, stream=self.stream)
+
+
+class Clock:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+
+@pytest.mark.anyio
+async def test_elapsed_excludes_stream_cleanup_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock(10.0)
+    monkeypatch.setattr("httpx._client.time.perf_counter", clock)
+    stream = BlockingCloseStream()
+    transport = BlockingCloseTransport(stream)
+    client = httpx.AsyncClient(transport=transport)
+    request = client.build_request("GET", "https://example.org")
+    response = await client.send(request, stream=True)
+    clock.value = 12.0
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(response.aclose)
+        await stream.started.wait()
+        with pytest.raises(
+            RuntimeError,
+            match="may only be accessed after the response has been read or closed",
+        ):
+            _ = response.elapsed
+        clock.value = 20.0
+        stream.release.set()
+
+    assert response.elapsed.total_seconds() == 2.0
+    await client.aclose()

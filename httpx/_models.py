@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+import contextvars
 import datetime
 import email.message
 import json as jsonlib
@@ -60,6 +61,11 @@ class _AsyncCloseState:
     def __init__(self) -> None:
         self.event = anyio.Event()
         self.failed = False
+
+
+_ASYNC_CLOSE_CONTEXT: contextvars.ContextVar[tuple[_AsyncCloseState, ...]] = (
+    contextvars.ContextVar("httpx_async_close_context", default=())
+)
 
 
 def _new_async_close_error(request: Request | None) -> CloseError:
@@ -1114,6 +1120,9 @@ class Response:
             state = _AsyncCloseState()
             self._async_close_state = state
             self._async_close_started = True
+            context_token = _ASYNC_CLOSE_CONTEXT.set(
+                (*_ASYNC_CLOSE_CONTEXT.get(), state)
+            )
             try:
                 with request_context(request=self._request):
                     await self.stream.aclose()
@@ -1128,6 +1137,14 @@ class Response:
                 self._async_close_state = None
                 state.event.set()
                 return
+            finally:
+                _ASYNC_CLOSE_CONTEXT.reset(context_token)
+
+        if state in _ASYNC_CLOSE_CONTEXT.get():
+            raise CloseError(
+                "Attempted to re-enter response close from the stream close operation.",
+                request=self._request,
+            )
 
         await state.event.wait()
         if state.failed:
