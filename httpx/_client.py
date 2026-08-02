@@ -178,8 +178,8 @@ class BoundAsyncStream(AsyncByteStream):
 
     async def aclose(self) -> None:
         elapsed = time.perf_counter() - self._start
-        self._response.elapsed = datetime.timedelta(seconds=elapsed)
         await self._stream.aclose()
+        self._response.elapsed = datetime.timedelta(seconds=elapsed)
 
 
 EventHook = typing.Callable[..., typing.Any]

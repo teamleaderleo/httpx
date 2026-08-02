@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+import contextvars
 import datetime
 import email.message
 import json as jsonlib
@@ -9,6 +10,8 @@ import typing
 import urllib.request
 from collections.abc import Mapping
 from http.cookiejar import Cookie, CookieJar
+
+import anyio
 
 from ._content import ByteStream, UnattachedStream, encode_request, encode_response
 from ._decoders import (
@@ -22,6 +25,7 @@ from ._decoders import (
     TextDecoder,
 )
 from ._exceptions import (
+    CloseError,
     CookieConflict,
     HTTPStatusError,
     RequestNotRead,
@@ -51,6 +55,28 @@ from ._utils import to_bytes_or_str, to_str
 __all__ = ["Cookies", "Headers", "Request", "Response"]
 
 SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
+
+
+class _AsyncCloseState:
+    def __init__(self) -> None:
+        self.event = anyio.Event()
+        self.failed = False
+
+
+_ASYNC_CLOSE_CONTEXT: contextvars.ContextVar[tuple[_AsyncCloseState, ...]] = (
+    contextvars.ContextVar("httpx_async_close_context", default=())
+)
+
+
+def _new_async_close_error(request: Request | None) -> CloseError:
+    failure = CloseError(
+        "Response close outcome is unknown after stream cleanup failed.",
+        request=request,
+    )
+    failure.__cause__ = CloseError(
+        "The original stream close failure was delivered to the initiating caller."
+    )
+    return failure
 
 
 def _is_known_encoding(encoding: str) -> bool:
@@ -542,6 +568,9 @@ class Response:
 
         self.is_closed = False
         self.is_stream_consumed = False
+        self._async_close_started = False
+        self._async_close_state: _AsyncCloseState | None = None
+        self._async_close_failed = False
 
         self.default_encoding = default_encoding
 
@@ -863,13 +892,24 @@ class Response:
         return {
             name: value
             for name, value in self.__dict__.items()
-            if name not in ["extensions", "stream", "is_closed", "_decoder"]
+            if name
+            not in [
+                "extensions",
+                "stream",
+                "is_closed",
+                "_decoder",
+                "_async_close_state",
+                "_async_close_failed",
+            ]
         }
 
     def __setstate__(self, state: dict[str, typing.Any]) -> None:
         for name, value in state.items():
             setattr(self, name, value)
         self.is_closed = True
+        self._async_close_started = True
+        self._async_close_state = None
+        self._async_close_failed = False
         self.extensions = {}
         self.stream = UnattachedStream()
 
@@ -1042,7 +1082,7 @@ class Response:
         """
         if self.is_stream_consumed:
             raise StreamConsumed()
-        if self.is_closed:
+        if self.is_closed or self._async_close_started:
             raise StreamClosed()
         if not isinstance(self.stream, AsyncByteStream):
             raise RuntimeError("Attempted to call an async iterator on a sync stream.")
@@ -1070,10 +1110,45 @@ class Response:
         if not isinstance(self.stream, AsyncByteStream):
             raise RuntimeError("Attempted to call an async close on a sync stream.")
 
-        if not self.is_closed:
-            self.is_closed = True
-            with request_context(request=self._request):
-                await self.stream.aclose()
+        if self.is_closed:
+            return
+        if self._async_close_failed:
+            raise _new_async_close_error(self._request)
+
+        state = self._async_close_state
+        if state is None:
+            state = _AsyncCloseState()
+            self._async_close_state = state
+            self._async_close_started = True
+            context_token = _ASYNC_CLOSE_CONTEXT.set(
+                (*_ASYNC_CLOSE_CONTEXT.get(), state)
+            )
+            try:
+                with request_context(request=self._request):
+                    await self.stream.aclose()
+            except BaseException:
+                self._async_close_failed = True
+                state.failed = True
+                self._async_close_state = None
+                state.event.set()
+                raise
+            else:
+                self.is_closed = True
+                self._async_close_state = None
+                state.event.set()
+                return
+            finally:
+                _ASYNC_CLOSE_CONTEXT.reset(context_token)
+
+        if state in _ASYNC_CLOSE_CONTEXT.get():
+            raise CloseError(
+                "Attempted to re-enter response close from the stream close operation.",
+                request=self._request,
+            )
+
+        await state.event.wait()
+        if state.failed:
+            raise _new_async_close_error(self._request)
 
 
 class Cookies(typing.MutableMapping[str, str]):
