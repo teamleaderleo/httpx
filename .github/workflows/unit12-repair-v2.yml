@@ -1,4 +1,4 @@
-name: Unit 12 repair executor
+name: Unit 12 publish verified repair
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: unit12-repair-executor
+  group: unit12-publish-verified-repair
   cancel-in-progress: false
 
 env:
@@ -18,122 +18,8 @@ env:
   PATCH_PATH: upstream/packets/12-httpx-terminal-async-close/patches/0001-fix-reentrant-close-and-elapsed-sampling.patch
 
 jobs:
-  focused:
-    name: Focused repair tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.9", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_REF }}
-          path: source
-          fetch-depth: 0
-      - uses: actions/checkout@v4
-        with:
-          repository: teamleaderleo/fieldwork
-          ref: upstream/12-httpx-terminal-async-close
-          path: fieldwork
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
-          cache: pip
-          cache-dependency-path: source/requirements.txt
-      - name: Verify exact clean source
-        working-directory: source
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git hash-object httpx/_models.py)" = 3ccb5290ceb95d96e24047bcec2897c52de16176
-          test "$(git hash-object httpx/_client.py)" = 79934d050cd77414fb6f9c1024f42f6029c924e0
-      - name: Apply retained repair
-        working-directory: source
-        run: |
-          git apply --check "../fieldwork/$PATCH_PATH"
-          git apply "../fieldwork/$PATCH_PATH"
-          test "$(git hash-object httpx/_models.py)" = 0533a7324d0ed45ffb1087570551efcdaed02fa5
-          test "$(git hash-object httpx/_client.py)" = 510b41959383dcf78bd311a236afc44dd92d010a
-          test "$(git hash-object tests/client/test_async_client_terminal_close_elapsed.py)" = 67545aede0ba92364f70dc9f37c5c2e0a010c836
-          test "$(git hash-object tests/models/test_async_response_close_reentry.py)" = 0be56b2cb9a9a2e7fabc1a6bc107bbcca520fd67
-      - name: Install dependencies
-        working-directory: source
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
-      - name: Run focused asyncio and Trio controls
-        working-directory: source
-        run: >-
-          python -m pytest -q
-          tests/models/test_async_response_close_reentry.py
-          tests/models/test_async_response_close_terminal_unknown.py
-          tests/models/test_async_response_close_terminal_cancellation.py
-          tests/client/test_async_client_terminal_close_elapsed.py
-      - name: Diff hygiene
-        working-directory: source
-        run: git diff --check
-
-  full:
-    name: Full repository gates (Python 3.13)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_REF }}
-          path: source
-          fetch-depth: 0
-      - uses: actions/checkout@v4
-        with:
-          repository: teamleaderleo/fieldwork
-          ref: upstream/12-httpx-terminal-async-close
-          path: fieldwork
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          allow-prereleases: true
-          cache: pip
-          cache-dependency-path: source/requirements.txt
-      - name: Verify and apply exact repair
-        working-directory: source
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          git apply --check "../fieldwork/$PATCH_PATH"
-          git apply "../fieldwork/$PATCH_PATH"
-          git diff --check
-      - name: Verify exact six-file fence
-        working-directory: source
-        shell: bash
-        run: |
-          git add -N tests/models/test_async_response_close_reentry.py
-          expected=$(printf '%s\n' \
-            httpx/_client.py \
-            httpx/_models.py \
-            tests/client/test_async_client_terminal_close_elapsed.py \
-            tests/models/test_async_response_close_reentry.py \
-            tests/models/test_async_response_close_terminal_cancellation.py \
-            tests/models/test_async_response_close_terminal_unknown.py | sort)
-          actual=$(git diff --name-only "$BASE_SHA" | sort)
-          test "$actual" = "$expected"
-      - name: Install dependencies
-        working-directory: source
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
-      - name: Static checks
-        working-directory: source
-        run: ./scripts/check
-      - name: Package and documentation build
-        working-directory: source
-        run: ./scripts/build
-      - name: Complete suite
-        working-directory: source
-        run: ./scripts/test
-      - name: Enforce complete coverage
-        working-directory: source
-        run: ./scripts/coverage
-
-  finalize:
-    name: Commit clean repaired source
-    needs: [focused, full]
+  publish:
+    name: Publish fully verified six-file repair
     if: github.event.pull_request.head.ref == 'fieldwork/171-terminal-close-repair-carrier'
     runs-on: ubuntu-latest
     steps:
@@ -145,15 +31,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: teamleaderleo/fieldwork
-          ref: upstream/12-httpx-terminal-async-close
+          ref: e59fb13a0a281be5ed2c94446430f5cb4b97424f
           path: fieldwork
-      - name: Apply exact repair to clean source
+      - name: Verify clean input and apply exact tested patch
         working-directory: source
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git hash-object httpx/_models.py)" = 3ccb5290ceb95d96e24047bcec2897c52de16176
+          test "$(git hash-object httpx/_client.py)" = 79934d050cd77414fb6f9c1024f42f6029c924e0
           git apply --check "../fieldwork/$PATCH_PATH"
           git apply "../fieldwork/$PATCH_PATH"
+          test "$(git hash-object httpx/_models.py)" = 0533a7324d0ed45ffb1087570551efcdaed02fa5
+          test "$(git hash-object httpx/_client.py)" = 510b41959383dcf78bd311a236afc44dd92d010a
+          test "$(git hash-object tests/client/test_async_client_terminal_close_elapsed.py)" = 67545aede0ba92364f70dc9f37c5c2e0a010c836
+          test "$(git hash-object tests/models/test_async_response_close_reentry.py)" = 0be56b2cb9a9a2e7fabc1a6bc107bbcca520fd67
+      - name: Verify exact six-file staged fence
+        working-directory: source
+        shell: bash
+        run: |
           git add -A
           git diff --cached --check
           expected=$(printf '%s\n' \
@@ -165,7 +61,7 @@ jobs:
             tests/models/test_async_response_close_terminal_unknown.py | sort)
           actual=$(git diff --cached --name-only "$BASE_SHA" | sort)
           test "$actual" = "$expected"
-      - name: Commit and publish repaired source
+      - name: Commit and push canonical source
         working-directory: source
         shell: bash
         run: |
