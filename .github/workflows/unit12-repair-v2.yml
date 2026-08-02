@@ -105,6 +105,7 @@ jobs:
         working-directory: source
         shell: bash
         run: |
+          git add -N tests/models/test_async_response_close_reentry.py
           expected=$(printf '%s\n' \
             httpx/_client.py \
             httpx/_models.py \
